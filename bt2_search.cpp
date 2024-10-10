@@ -4719,7 +4719,8 @@ static void multiseedSearch(
 	// The condition_variable synchronization can be problematic
 	// in certain situations.
 	// Disabling it and using the polling-based lock-free mechanism can help there
-	bool readahead_useCVLocks = false; // TODO: Make it dynamic... preserve old behavior for now
+	bool readahead_useCVLocks = true; // Maybe we should make it dynamic, but for now just use the lower overhead one
+
 	// Important: Need at least nthreads+1 elements, more is OK
 	PatternSourceReadAheadFactory readahead_factory(patsrc,pp,4*nthreads+1,readahead_useCVLocks);
 	multiseed_readahead_factory = &readahead_factory;
