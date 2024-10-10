@@ -1,11 +1,17 @@
 
 <!-- badges: start -->
-![Random Tests](https://github.com/BenLangmead/bowtie2/actions/workflows/random-tests.yml/badge.svg)
-![Simple Tests](https://github.com/BenLangmead/bowtie2/actions/workflows/simple-tests.yml/badge.svg)
-[![Version](https://img.shields.io/badge/version-2.5.4-green.svg)](https://shields.io/)
-<!-- [![Build Status](https://travis-ci.org/BenLangmead/bowtie2.svg?branch=master)](https://travis-ci.org/BenLangmead/bowtie2) -->
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 <!--badges: end -->
+
+## Disclaimer
+
+This repository is a derivative of BenLangmead's [bowtie2](https://github.com/BenLangmead/bowtie2).
+While it tries to provide a similar experience, it is based on a client-server concept
+and may not be always up-to-date with the latest improvements present upstream. 
+
+This repository is also still very much work-in-progress, so the documentation may not reflect the current state of the code.
+
+Use at your own risk.
 
 ## Overview
 
@@ -34,9 +40,6 @@ s390x.  If you plan to compile Bowtie 2 yourself, make sure you at least have
 the [zlib](https://www.zlib.net) library and header files installed. See the
 [Building from source](http://bowtie-bio.sourceforge.net/bowtie2/manual.shtml#building-from-source)
 section of the manual for details.
-
-## Getting started
-Looking to try out Bowtie 2? Check out the [Bowtie 2 UI](http://bit.ly/bt2ui-beta) (currently in beta).
 
 ### Alignment
 `bowtie2` takes a Bowtie 2 index and a set of sequencing read files and outputs a
