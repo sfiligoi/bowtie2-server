@@ -581,6 +581,7 @@ bool AlnSinkWrap::sameRead(
  * first stage to run.
  */
 int AlnSinkWrap::nextRead(
+	AlnSink*     g,
 	// One of the other of rd1, rd2 will = NULL if read is unpaired
 	const Read* rd1,      // new mate #1
 	const Read* rd2,      // new mate #2
@@ -590,6 +591,7 @@ int AlnSinkWrap::nextRead(
 	assert(!init_);
 	assert(rd1 != NULL || rd2 != NULL);
 	init_ = true;
+	g_ = g;
 	// Keep copy of new read, so that we can compare it with the
 	// next one
 	if(rd1 != NULL) {
@@ -663,24 +665,24 @@ void AlnSinkWrap::finishRead(
 	bool xeq)                       // = false
 {
 	obuf_.clear();
-	OutputQueueMark qqm(g_.outq(), obuf_, rdid_, threadid_);
+	OutputQueueMark qqm(g_->outq(), obuf_, rdid_, threadid_);
 	assert(init_);
 	if(!suppressSeedSummary) {
 		if(sr1 != NULL) {
 			assert(rd1_ != NULL);
 			// Mate exists and has non-empty SeedResults
-			g_.reportSeedSummary(obuf_, *rd1_, rdid_, threadid_, *sr1, true);
+			g_->reportSeedSummary(obuf_, *rd1_, rdid_, threadid_, *sr1, true);
 		} else if(rd1_ != NULL) {
 			// Mate exists but has NULL SeedResults
-			g_.reportEmptySeedSummary(obuf_, *rd1_, rdid_, true);
+			g_->reportEmptySeedSummary(obuf_, *rd1_, rdid_, true);
 		}
 		if(sr2 != NULL) {
 			assert(rd2_ != NULL);
 			// Mate exists and has non-empty SeedResults
-			g_.reportSeedSummary(obuf_, *rd2_, rdid_, threadid_, *sr2, true);
+			g_->reportSeedSummary(obuf_, *rd2_, rdid_, threadid_, *sr2, true);
 		} else if(rd2_ != NULL) {
 			// Mate exists but has NULL SeedResults
-			g_.reportEmptySeedSummary(obuf_, *rd2_, rdid_, true);
+			g_->reportEmptySeedSummary(obuf_, *rd2_, rdid_, true);
 		}
 	}
 	if(!suppressAlignments) {
@@ -808,7 +810,7 @@ void AlnSinkWrap::finishRead(
 				assert_eq(abs(rs1_[i].fragmentLength()), abs(rs2_[i].fragmentLength()));
 			}
 			assert(!select1_.empty());
-			g_.reportHits(
+			g_->reportHits(
 				obuf_,
 				staln_,
 				threadid_,
@@ -842,7 +844,7 @@ void AlnSinkWrap::finishRead(
 				}
 			}
 			init_ = false;
-			//g_.outq().finishRead(obuf_, rdid_, threadid_);
+			g_ = NULL;
 			return;
 		}
 		// Report disconcordant paired-end alignments if possible
@@ -939,7 +941,7 @@ void AlnSinkWrap::finishRead(
 				bestUnchosenCDist);
 			assert_eq(0, off);
 			assert(!select1_.empty());
-			g_.reportHits(
+			g_->reportHits(
 				obuf_,
 				staln_,
 				threadid_,
@@ -963,7 +965,7 @@ void AlnSinkWrap::finishRead(
 			met.nconcord_0++;
 			met.ndiscord++;
 			init_ = false;
-			//g_.outq().finishRead(obuf_, rdid_, threadid_);
+			g_ = NULL;
 			return;
 		}
 		// If we're at this point, at least one mate failed to align.
@@ -1223,7 +1225,7 @@ void AlnSinkWrap::finishRead(
 			if(sr1 != NULL) sr1->toSeedAlSumm(ssm1);
 			if(sr2 != NULL) sr2->toSeedAlSumm(ssm2);
 			assert(!select1_.empty());
-			g_.reportHits(
+			g_->reportHits(
 				obuf_,
 				staln_,
 				threadid_,
@@ -1256,7 +1258,7 @@ void AlnSinkWrap::finishRead(
 			if(sr1 != NULL) sr1->toSeedAlSumm(ssm1);
 			if(sr2 != NULL) sr2->toSeedAlSumm(ssm2);
 			assert(!select2_.empty());
-			g_.reportHits(
+			g_->reportHits(
 				obuf_,
 				staln_,
 				threadid_,
@@ -1313,7 +1315,7 @@ void AlnSinkWrap::finishRead(
 				(repRs2 != NULL) ? repRs2->fw() : false, // opp fw
 				scUnMapped,
 				xeq);
-			g_.reportUnaligned(
+			g_->reportUnaligned(
 				obuf_,      // string to write output to
 				staln_,
 				threadid_,
@@ -1361,7 +1363,7 @@ void AlnSinkWrap::finishRead(
 				(repRs1 != NULL) ? repRs1->fw() : false, // opp fw
 				scUnMapped,
 				xeq);
-			g_.reportUnaligned(
+			g_->reportUnaligned(
 				obuf_,      // string to write output to
 				staln_,
 				threadid_,
@@ -1380,6 +1382,7 @@ void AlnSinkWrap::finishRead(
 		}
 	} // if(suppress alignments)
 	init_ = false;
+	g_ = NULL;
 	return;
 }
 

@@ -958,11 +958,10 @@ class AlnSinkWrap {
 public:
 
 	AlnSinkWrap(
-		AlnSink& g,                // AlnSink being wrapped
 		const ReportingParams& rp, // Parameters governing reporting
 		Mapq& mapq,                // Mapq calculator
 		size_t threadId) :         // Thread ID
-		g_(g),
+		g_(NULL),
 		rp_(rp),
 		threadid_(threadId),
 		mapq_(mapq),
@@ -999,6 +998,7 @@ public:
 	 * stage to run.
 	 */
 	int nextRead(
+		AlnSink*     g,       // Read-specific sink
 		// One of the other of rd1, rd2 will = NULL if read is unpaired
 		const Read* rd1,      // new mate #1
 		const Read* rd2,      // new mate #2
@@ -1253,7 +1253,7 @@ protected:
 		RandomSource&        rnd)
 		const;
 
-	AlnSink&        g_;     // global alignment sink
+	AlnSink        *g_;     // global alignment sink
 	ReportingParams rp_;    // reporting parameters: khits, mhits etc
 	size_t          threadid_; // thread ID
 	Mapq&           mapq_;  // mapq calculator
