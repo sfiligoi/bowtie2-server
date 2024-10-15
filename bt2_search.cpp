@@ -3071,7 +3071,6 @@ static void multiseedSearchWorker(void *vp) {
 
 		// Make a per-thread wrapper for the global MHitSink object.
 		AlnSinkWrap msinkwrap(
-			msink,         // global sink
 			rp,            // reporting parameters
 			*bmapq,        // MAPQ calculator
 			(size_t)tid);  // thread id
@@ -3238,6 +3237,7 @@ static void multiseedSearchWorker(void *vp) {
 					const size_t rdlen2 = paired ? ps->read_b().length() : 0;
 					olm.bases += (rdlen1 + rdlen2);
 					msinkwrap.nextRead(
+						&msink,         // global sink for now
 						&ps->read_a(),
 						paired ? &ps->read_b() : NULL,
 						rdid,
@@ -4192,7 +4192,6 @@ static void multiseedSearchWorker_2p5(void *vp) {
 
 	// Make a per-thread wrapper for the global MHitSink object.
 	AlnSinkWrap msinkwrap(
-		msink,         // global sink
 		rp,            // reporting parameters
 		*bmapq,        // MAPQ calculator
 		(size_t)tid);  // thread id
@@ -4333,6 +4332,7 @@ static void multiseedSearchWorker_2p5(void *vp) {
 			// Check if read is identical to previous read
 			rnd.init(ROTL(ps->read_a().seed, 5));
 			msinkwrap.nextRead(
+				&msink,         // global sink for now
 				&ps->read_a(),
 				paired ? &ps->read_b() : NULL,
 				rdid,
