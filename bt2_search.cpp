@@ -61,7 +61,6 @@
 #include "opts.h"
 #include "outq.h"
 #include "aligner_seed2.h"
-#include "bt2_search.h"
 
 using namespace std;
 
