@@ -64,6 +64,10 @@
 #define SET_BINARY_MODE(fd)
 #endif
 
+// full definition in aln_sink.h
+// but we only need the pointer here
+class AlnSink;
+
 /**
  * Classes and routines for reading reads from various input sources.
  */
@@ -246,6 +250,7 @@ public:
 	 */
 	virtual std::pair<bool, int> nextBatch(
 		PerThreadReadBuf& pt,
+		AlnSink* &msink,
 		bool batch_a,
 		bool lock = false) = 0;
 
@@ -266,6 +271,7 @@ public:
 	 */
 	static PatternSource* patsrcFromStrings(
 		const PatternParams& p,
+		AlnSink* msink,
 		const EList<std::string>& qs);
 
 	/**
@@ -300,7 +306,8 @@ public:
 	 */
 	VectorPatternSource(
 		const EList<std::string>& v,
-		const PatternParams& p);
+		const PatternParams& p,
+		AlnSink* msink);
 
 	virtual ~VectorPatternSource() { }
 
@@ -312,6 +319,7 @@ public:
 	 */
 	virtual std::pair<bool, int> nextBatch(
 		PerThreadReadBuf& pt,
+		AlnSink* &msink,
 		bool batch_a,
 		bool lock = false);
 
@@ -333,8 +341,10 @@ private:
 
 	pair<bool, int> nextBatchImpl(
 		PerThreadReadBuf& pt,
+		AlnSink* &msink,
 		bool batch_a);
 
+	AlnSink* msink_;		// Associated sink
 	size_t cur_;			   // index for first read of next batch
 	size_t skip_;			   // # reads to skip
 	bool paired_;			   // whether reads are paired
@@ -360,8 +370,10 @@ class CFilePatternSource : public PatternSource {
 public:
 	CFilePatternSource(
 		const EList<std::string>& infiles,
-		const PatternParams& p) :
+		const PatternParams& p,
+                AlnSink* msink) :
 		PatternSource(p),
+		msink_(msink),
 		infiles_(infiles),
 		filecur_(0),
 		fp_(NULL),
@@ -415,6 +427,7 @@ public:
 	 */
 	virtual std::pair<bool, int> nextBatch(
 		PerThreadReadBuf& pt,
+		AlnSink* &msink,
 		bool batch_a,
 		bool lock = false);
 
@@ -529,6 +542,7 @@ protected:
 	}
 #endif
 
+	AlnSink* msink_;		// Associated sink
 	EList<std::string> infiles_;	 // filenames for read files
 	EList<bool> errs_;		 // whether we've already printed an error for each file
 	size_t filecur_;		 // index into infiles_ of next file to read
@@ -547,6 +561,7 @@ private:
 
 	pair<bool, int> nextBatchImpl(
 		PerThreadReadBuf& pt,
+		AlnSink* &msink,
 		bool batch_a);
 };
 
@@ -559,8 +574,10 @@ public:
 
 	FastaPatternSource(
 		const EList<std::string>& infiles,
-		const PatternParams& p, bool interleaved) :
-		CFilePatternSource(infiles, p),
+		const PatternParams& p,
+                AlnSink* msink,
+		bool interleaved) :
+		CFilePatternSource(infiles, p, msink),
 		first_(true),
 		interleaved_(interleaved) { }
 
@@ -623,8 +640,9 @@ public:
 	TabbedPatternSource(
 		const EList<std::string>& infiles,
 		const PatternParams& p,
+                AlnSink* msink,
 		bool  secondName) :  // whether it's --12/--tab5 or --tab6
-		CFilePatternSource(infiles, p),
+		CFilePatternSource(infiles, p, msink),
 		secondName_(secondName) { }
 
 	/**
@@ -670,8 +688,9 @@ public:
 
 	QseqPatternSource(
 		const EList<std::string>& infiles,
-		const PatternParams& p) :
-		CFilePatternSource(infiles, p) { }
+		const PatternParams& p,
+                AlnSink* msink):
+		CFilePatternSource(infiles, p, msink) { }
 
 	/**
 	 * Finalize qseq parsing outside critical section.
@@ -699,8 +718,9 @@ class FastaContinuousPatternSource : public CFilePatternSource {
 public:
 	FastaContinuousPatternSource(
 		const EList<std::string>& infiles,
-		const PatternParams& p) :
-		CFilePatternSource(infiles, p),
+		const PatternParams& p,
+                AlnSink* msink):
+		CFilePatternSource(infiles, p, msink),
 		length_(p.sampleLen),
 		freq_(p.sampleFreq),
 		eat_(length_-1),
@@ -774,8 +794,10 @@ public:
 
 	FastqPatternSource(
 		const EList<std::string>& infiles,
-		const PatternParams& p, bool interleaved) :
-		CFilePatternSource(infiles, p),
+		const PatternParams& p,
+                AlnSink* msink,
+		bool interleaved) :
+		CFilePatternSource(infiles, p, msink),
 		first_(true),
 		interleaved_(interleaved) { }
 
@@ -854,8 +876,9 @@ public:
 
 	BAMPatternSource(
 		const EList<std::string>& infiles,
-		const PatternParams& p) :
-		CFilePatternSource(infiles, p),
+		const PatternParams& p,
+                AlnSink* msink) : 
+		CFilePatternSource(infiles, p, msink),
 		first_(true),
 		alignment_batch(0),
 		alignment_offset(0),
@@ -884,7 +907,7 @@ public:
 
 protected:
 
-	virtual std::pair<bool, int> nextBatch(PerThreadReadBuf& pt, bool batch_a, bool lock = false);
+	virtual std::pair<bool, int> nextBatch(PerThreadReadBuf& pt, AlnSink* &msink, bool batch_a, bool lock = false);
 
 	uint16_t nextBGZFBlockFromFile(BGZF& block);
 
@@ -927,8 +950,9 @@ public:
 
 	RawPatternSource(
 		const EList<std::string>& infiles,
-		const PatternParams& p) :
-		CFilePatternSource(infiles, p), first_(true) { }
+		const PatternParams& p,
+                AlnSink* msink) : 
+		CFilePatternSource(infiles, p, msink), first_(true) { }
 
 	virtual void reset() {
 		first_ = true;
@@ -977,7 +1001,7 @@ public:
 	/**
 	 * Member function override by concrete, format-specific classes.
 	 */
-	virtual std::pair<bool, int> nextBatch(PerThreadReadBuf& pt) = 0;
+	virtual std::pair<bool, int> nextBatch(PerThreadReadBuf& pt, AlnSink* &msink) = 0;
 
 	/**
 	 * Make appropriate call into the format layer to parse individual read.
@@ -1001,6 +1025,7 @@ public:
 		const EList<string>& sra_accs,   // SRA accessions
 #endif
 		PatternParams& p,		// read-in params
+		AlnSink* msink,
 		bool verbose);				// be talkative?
 
 protected:
@@ -1057,7 +1082,7 @@ public:
 	 * synchronization can be handed by the PatternSource contained
 	 * in the src_ field.
 	 */
-	virtual std::pair<bool, int> nextBatch(PerThreadReadBuf& pt);
+	virtual std::pair<bool, int> nextBatch(PerThreadReadBuf& pt, AlnSink* &msink);
 
 	/**
 	 * Make appropriate call into the format layer to parse individual read.
@@ -1131,7 +1156,7 @@ public:
 	 * one critical section surrounding both calls into the srca_ and
 	 * srcb_ member functions.
 	 */
-	virtual std::pair<bool, int> nextBatch(PerThreadReadBuf& pt);
+	virtual std::pair<bool, int> nextBatch(PerThreadReadBuf& pt, AlnSink* &msink);
 
 	/**
 	 * Make appropriate call into the format layer to parse individual read.
@@ -1165,6 +1190,7 @@ public:
 		composer_(composer),
 		buf_(pp.max_buf),
 		pp_(pp),
+		msink_(NULL),
 		last_batch_(false),
 		last_batch_size_(0) { }
 
@@ -1176,6 +1202,8 @@ public:
 	 * hierarchies to populate the per-thread buffers.
 	 */
 	std::pair<bool, bool> nextReadPair();
+
+	AlnSink& msink() {return *msink_; }
 
 	Read& read_a() { return buf_.read_a(); }
 	Read& read_b() { return buf_.read_b(); }
@@ -1192,7 +1220,8 @@ private:
 	 */
 	std::pair<bool, int> nextBatch() {
 		buf_.reset();
-		std::pair<bool, int> res = composer_.nextBatch(buf_);
+		msink_ = NULL;
+		std::pair<bool, int> res = composer_.nextBatch(buf_, msink_);
 		buf_.init();
 		return res;
 	}
@@ -1243,6 +1272,7 @@ private:
 	PatternComposer& composer_; // pattern composer
 	PerThreadReadBuf buf_;		// read data buffer
 	const PatternParams& pp_;	// pattern-related parameters
+	AlnSink        *msink_;         // associated sink
 	bool last_batch_;			// true if this is final batch
 	int last_batch_size_;		// # reads read in previous batch
 };

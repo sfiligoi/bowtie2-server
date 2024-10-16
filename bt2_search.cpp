@@ -3018,7 +3018,6 @@ static void multiseedSearchWorker(void *vp) {
 	const Ebwt*             ebwtBw   = multiseed_ebwtBw;
 	const Scoring&          sc       = *multiseed_sc;
 	const BitPairReference& ref      = *multiseed_refs;
-	AlnSink&                msink    = *multiseed_msink;
 	OutFileBuf*             metricsOfb = multiseed_metricsOfb;
 
 	{
@@ -3174,6 +3173,7 @@ static void multiseedSearchWorker(void *vp) {
 			} else if(!success) {
 				continue;
 			}
+			AlnSink& msink = ps->msink();
 			TReadId rdid = ps->read_a().rdid;
 			bool sample = true;
 			if(arbitraryRandom) {
@@ -3197,6 +3197,7 @@ static void multiseedSearchWorker(void *vp) {
 				{
 					// Do a periodic merge.  Update global metrics, in a
 					// synchronized manner if needed.
+					AlnSink& msink    = *multiseed_msink;
 					MERGE_METRICS(metrics);
 					mergei = 0;
 					// Check if a progress message should be printed
@@ -3237,7 +3238,7 @@ static void multiseedSearchWorker(void *vp) {
 					const size_t rdlen2 = paired ? ps->read_b().length() : 0;
 					olm.bases += (rdlen1 + rdlen2);
 					msinkwrap.nextRead(
-						&msink,         // global sink for now
+						&msink,
 						&ps->read_a(),
 						paired ? &ps->read_b() : NULL,
 						rdid,
@@ -4137,8 +4138,11 @@ static void multiseedSearchWorker(void *vp) {
 	   } while (ps->nextReadPairReady()); // must read the whole cached buffer
 	} // while(true)
 
+		{
+		AlnSink&                msink    = *multiseed_msink;
 		// One last metrics merge
 		MERGE_METRICS(metrics);
+		}
 
 		if(dpLog    != NULL) dpLog->close();
 		if(dpLogOpp != NULL) dpLogOpp->close();
@@ -4168,7 +4172,6 @@ static void multiseedSearchWorker_2p5(void *vp) {
 	const Ebwt&             ebwtBw   = *multiseed_ebwtBw;
 	const Scoring&          sc       = *multiseed_sc;
 	const BitPairReference& ref      = *multiseed_refs;
-	AlnSink&                msink    = *multiseed_msink;
 	OutFileBuf*             metricsOfb = multiseed_metricsOfb;
 
 	// Sinks: these are so that we can print tables encoding counts for
@@ -4283,6 +4286,7 @@ static void multiseedSearchWorker_2p5(void *vp) {
 		} else if(!success) {
 			continue;
 		}
+		AlnSink& msink = ps->msink();
 		TReadId rdid = ps->read_a().rdid;
 		bool sample = true;
 		if(arbitraryRandom) {
@@ -4304,6 +4308,7 @@ static void multiseedSearchWorker_2p5(void *vp) {
 			{
 				// Do a periodic merge.  Update global metrics, in a
 				// synchronized manner if needed.
+				AlnSink& msink    = *multiseed_msink;
 				MERGE_METRICS(metrics);
 				mergei = 0;
 				// Check if a progress message should be printed
@@ -4332,7 +4337,7 @@ static void multiseedSearchWorker_2p5(void *vp) {
 			// Check if read is identical to previous read
 			rnd.init(ROTL(ps->read_a().seed, 5));
 			msinkwrap.nextRead(
-				&msink,         // global sink for now
+				&msink,
 				&ps->read_a(),
 				paired ? &ps->read_b() : NULL,
 				rdid,
@@ -4491,7 +4496,10 @@ static void multiseedSearchWorker_2p5(void *vp) {
 	} // while(true)
 
 	// One last metrics merge
+	{
+	AlnSink&                msink    = *multiseed_msink;
 	MERGE_METRICS(metrics);
+	}
 	p->done->fetch_add(1);
 
 	return;
@@ -4849,22 +4857,6 @@ static void driver(
 		preserve_tags, // keep existing tags when aligning BAM files
 		align_paired_reads // Align only the paired reads in BAM file
 		);
-	if(gVerbose || startVerbose) {
-		cerr << "Creating PatternSource: "; logTime(cerr, true);
-	}
-	PatternComposer *patsrc = PatternComposer::setupPatternComposer(
-		queries,     // singles, from argv
-		mates1,      // mate1's, from -1 arg
-		mates2,      // mate2's, from -2 arg
-		mates12,     // both mates on each line, from --12 arg
-		qualities,   // qualities associated with singles
-		qualities1,  // qualities associated with m1
-		qualities2,  // qualities associated with m2
-#ifdef USE_SRA
-		sra_accs,    // SRA accessions
-#endif
-		pp,          // read read-in parameters
-		gVerbose || startVerbose); // be talkative
 	// Open hit output file
 	if(gVerbose || startVerbose) {
 		cerr << "Opening hit output file: "; logTime(cerr, true);
@@ -5032,6 +5024,23 @@ static void driver(
 			cerr << "Invalid output type: " << outType << endl;
 			throw 1;
 		}
+		if(gVerbose || startVerbose) {
+			cerr << "Creating PatternSource: "; logTime(cerr, true);
+		}
+		PatternComposer *patsrc = PatternComposer::setupPatternComposer(
+			queries,     // singles, from argv
+			mates1,      // mate1's, from -1 arg
+			mates2,      // mate2's, from -2 arg
+			mates12,     // both mates on each line, from --12 arg
+			qualities,   // qualities associated with singles
+			qualities1,  // qualities associated with m1
+			qualities2,  // qualities associated with m2
+#ifdef USE_SRA
+			sra_accs,    // SRA accessions
+#endif
+			pp,          // read read-in parameters
+			mssink,
+			gVerbose || startVerbose); // be talkative
 		if(gVerbose || startVerbose) {
 			cerr << "Dispatching to search driver: "; logTime(cerr, true);
 		}

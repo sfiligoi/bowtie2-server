@@ -88,21 +88,22 @@ static uint32_t genRandSeed(
  */
 PatternSource* PatternSource::patsrcFromStrings(
 	const PatternParams& p,
+	AlnSink* msink,
 	const EList<string>& qs)
 {
 	switch(p.format) {
-		case FASTA:       return new FastaPatternSource(qs, p, p.interleaved);
-		case FASTA_CONT:  return new FastaContinuousPatternSource(qs, p);
-		case RAW:         return new RawPatternSource(qs, p);
-		case FASTQ:       return new FastqPatternSource(qs, p, p.interleaved);
-		case BAM:         return new BAMPatternSource(qs, p);
-		case TAB_MATE5:   return new TabbedPatternSource(qs, p, false);
-		case TAB_MATE6:   return new TabbedPatternSource(qs, p, true);
-		case CMDLINE:     return new VectorPatternSource(qs, p);
-		case QSEQ:        return new QseqPatternSource(qs, p);
+		case FASTA:       return new FastaPatternSource(qs, p, msink, p.interleaved);
+		case FASTA_CONT:  return new FastaContinuousPatternSource(qs, p, msink);
+		case RAW:         return new RawPatternSource(qs, p, msink);
+		case FASTQ:       return new FastqPatternSource(qs, p, msink, p.interleaved);
+		case BAM:         return new BAMPatternSource(qs, p, msink);
+		case TAB_MATE5:   return new TabbedPatternSource(qs, p, msink, false);
+		case TAB_MATE6:   return new TabbedPatternSource(qs, p, msink, true);
+		case CMDLINE:     return new VectorPatternSource(qs, p, msink);
+		case QSEQ:        return new QseqPatternSource(qs, p, msink);
 #ifdef USE_SRA
 		case SRA_FASTA:
-		case SRA_FASTQ:   return new SRAPatternSource(qs, p);
+		case SRA_FASTQ:   return new SRAPatternSource(qs, p, msink);
 #endif
 		default: {
 			cerr << "Internal error; bad patsrc format: " << p.format << endl;
@@ -189,7 +190,7 @@ pair<bool, bool> PatternSourcePerThread::nextReadPair() {
  * singleton reads.  Returns true iff ra and rb contain a new
  * pair; returns false if ra contains a new unpaired read.
  */
-pair<bool, int> SoloPatternComposer::nextBatch(PerThreadReadBuf& pt) {
+pair<bool, int> SoloPatternComposer::nextBatch(PerThreadReadBuf& pt, AlnSink* &msink) {
 	size_t cur = cur_;
 	while(cur < src_->size()) {
 		// Patterns from srca_[cur_] are unpaired
@@ -197,6 +198,7 @@ pair<bool, int> SoloPatternComposer::nextBatch(PerThreadReadBuf& pt) {
 		do {
 			res = (*src_)[cur]->nextBatch(
 				pt,
+				msink,
 				true,  // batch A (or pairs)
 				lock_); // grab lock below
 		} while(!res.first && res.second == 0);
@@ -219,7 +221,7 @@ pair<bool, int> SoloPatternComposer::nextBatch(PerThreadReadBuf& pt) {
  * singleton reads.  Returns true iff ra and rb contain a new
  * pair; returns false if ra contains a new unpaired read.
  */
-pair<bool, int> DualPatternComposer::nextBatch(PerThreadReadBuf& pt) {
+pair<bool, int> DualPatternComposer::nextBatch(PerThreadReadBuf& pt, AlnSink* &msink) {
 	// 'cur' indexes the current pair of PatternSources
 	size_t cur = cur_;
 	while(cur < srca_->size()) {
@@ -227,6 +229,7 @@ pair<bool, int> DualPatternComposer::nextBatch(PerThreadReadBuf& pt) {
 			// Patterns from srca_ are unpaired
 			pair<bool, int> res = (*srca_)[cur]->nextBatch(
 				pt,
+				msink,
 				true,  // batch A (or pairs)
 				lock_); // grab lock below
 			if(res.second == 0 && cur < srca_->size() - 1) {
@@ -242,14 +245,18 @@ pair<bool, int> DualPatternComposer::nextBatch(PerThreadReadBuf& pt) {
 			// in the two mate files
 			{
 				ThreadSafe ts(mutex_m);
+				AlnSink* msinkb;
 				resa = (*srca_)[cur]->nextBatch(
 					pt,
+					msink,
 					true,   // batch A
 					false); // don't grab lock below
 				resb = (*srcb_)[cur]->nextBatch(
 					pt,
+					msinkb,
 					false,  // batch B
 					false); // don't grab lock below
+				// on success, asser_eq(msink,msinkb)
 				assert_eq((*srca_)[cur]->readCount(),
 				          (*srcb_)[cur]->readCount());
 			}
@@ -314,6 +321,7 @@ PatternComposer* PatternComposer::setupPatternComposer(
 	const EList<string>& sra_accs, // SRA accessions
 #endif
 	PatternParams& p,    // read-in parameters
+	AlnSink* msink,
 	bool verbose)              // be talkative?
 {
 	EList<PatternSource*>* a  = new EList<PatternSource*>();
@@ -329,7 +337,7 @@ PatternComposer* PatternComposer::setupPatternComposer(
 			tmp.push_back(m12[i]);
 			assert_eq(1, tmp.size());
 		}
-		a->push_back(PatternSource::patsrcFromStrings(p, *qs));
+		a->push_back(PatternSource::patsrcFromStrings(p, msink, *qs));
 		b->push_back(NULL);
 		p.interleaved = false;
 		if(!p.fileParallel) {
@@ -347,7 +355,7 @@ PatternComposer* PatternComposer::setupPatternComposer(
 			tmp.push_back(sra_accs[i]);
 			assert_eq(1, tmp.size());
 		}
-		a->push_back(PatternSource::patsrcFromStrings(p, *qs));
+		a->push_back(PatternSource::patsrcFromStrings(p, msink, *qs));
 		b->push_back(NULL);
 		if(!p.fileParallel) {
 			break;
@@ -366,7 +374,7 @@ PatternComposer* PatternComposer::setupPatternComposer(
 			tmpSeq.push_back(m1[i]);
 			assert_eq(1, tmpSeq.size());
 		}
-		a->push_back(PatternSource::patsrcFromStrings(p, *qs));
+		a->push_back(PatternSource::patsrcFromStrings(p, msink, *qs));
 		if(!p.fileParallel) {
 			break;
 		}
@@ -383,7 +391,7 @@ PatternComposer* PatternComposer::setupPatternComposer(
 			tmpSeq.push_back(m2[i]);
 			assert_eq(1, tmpSeq.size());
 		}
-		b->push_back(PatternSource::patsrcFromStrings(p, *qs));
+		b->push_back(PatternSource::patsrcFromStrings(p, msink, *qs));
 		if(!p.fileParallel) {
 			break;
 		}
@@ -403,7 +411,7 @@ PatternComposer* PatternComposer::setupPatternComposer(
 			tmpSeq.push_back(si[i]);
 			assert_eq(1, tmpSeq.size());
 		}
-		patsrc = PatternSource::patsrcFromStrings(p, *qs);
+		patsrc = PatternSource::patsrcFromStrings(p, msink, *qs);
 		assert(patsrc != NULL);
 		a->push_back(patsrc);
 		b->push_back(NULL);
@@ -433,6 +441,7 @@ void PatternComposer::free_EList_pmembers( const EList<PatternSource*> &elist) {
  */
 pair<bool, int> CFilePatternSource::nextBatchImpl(
 	PerThreadReadBuf& pt,
+	AlnSink* &msink,
 	bool batch_a)
 {
 	bool done = false;
@@ -457,11 +466,13 @@ pair<bool, int> CFilePatternSource::nextBatchImpl(
 	}
 	assert_geq(nread, 0);
 	readCnt_ += nread;
+	msink = msink_;
 	return make_pair(done, nread);
 }
 
 pair<bool, int> CFilePatternSource::nextBatch(
 	PerThreadReadBuf& pt,
+	AlnSink* &msink,
 	bool batch_a,
 	bool lock)
 {
@@ -469,9 +480,9 @@ pair<bool, int> CFilePatternSource::nextBatch(
 		// synchronization at this level because both reading and manipulation of
 		// current file pointer have to be protected
 		ThreadSafe ts(mutex);
-		return nextBatchImpl(pt, batch_a);
+		return nextBatchImpl(pt, msink, batch_a);
 	} else {
-		return nextBatchImpl(pt, batch_a);
+		return nextBatchImpl(pt, msink, batch_a);
 	}
 }
 
@@ -596,8 +607,10 @@ void CFilePatternSource::open() {
  */
 VectorPatternSource::VectorPatternSource(
 	const EList<string>& seqs,
-	const PatternParams& p) :
+	const PatternParams& p,
+	AlnSink* msink):
 	PatternSource(p),
+	msink_(msink),
 	cur_(p.skip),
 	skip_(p.skip),
 	paired_(false),
@@ -643,6 +656,7 @@ VectorPatternSource::VectorPatternSource(
  */
 pair<bool, int> VectorPatternSource::nextBatchImpl(
 	PerThreadReadBuf& pt,
+	AlnSink* &msink,
 	bool batch_a)
 {
 	pt.setReadId(cur_);
@@ -652,19 +666,21 @@ pair<bool, int> VectorPatternSource::nextBatchImpl(
 		readbuf[readi].readOrigBuf = bufs_[cur_];
 	}
 	readCnt_ += readi;
+	msink = msink_;
 	return make_pair(cur_ == bufs_.size(), readi);
 }
 
 pair<bool, int> VectorPatternSource::nextBatch(
 	PerThreadReadBuf& pt,
+	AlnSink* &msink,
 	bool batch_a,
 	bool lock)
 {
 	if(lock) {
 		ThreadSafe ts(mutex);
-		return nextBatchImpl(pt, batch_a);
+		return nextBatchImpl(pt, msink, batch_a);
 	} else {
-		return nextBatchImpl(pt, batch_a);
+		return nextBatchImpl(pt, msink, batch_a);
 	}
 }
 
@@ -1311,7 +1327,7 @@ uint16_t BAMPatternSource::nextBGZFBlockFromFile(BGZF& b) {
 	return bsize;
 }
 
-std::pair<bool, int> BAMPatternSource::nextBatch(PerThreadReadBuf& pt, bool batch_a, bool lock) {
+std::pair<bool, int> BAMPatternSource::nextBatch(PerThreadReadBuf& pt, AlnSink* &msink, bool batch_a, bool lock) {
         bool done = false;
 	uint16_t cdata_len;
 	unsigned nread = 0;
@@ -1344,6 +1360,8 @@ std::pair<bool, int> BAMPatternSource::nextBatch(PerThreadReadBuf& pt, bool batc
 
 	pt.setReadId(readCnt_);
 	readCnt_ += nread;
+
+	msink = msink_;
 
 	return make_pair(done, nread);
 }
