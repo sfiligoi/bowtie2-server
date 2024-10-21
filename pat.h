@@ -992,7 +992,7 @@ private:
  */
 class PatternComposer {
 public:
-	PatternComposer(const PatternParams& p) : mutex_m() { }
+	PatternComposer() : mutex_m() { }
 
 	virtual ~PatternComposer() { }
 
@@ -1046,9 +1046,8 @@ class SoloPatternComposer : public PatternComposer {
 public:
 
 	SoloPatternComposer(
-		const EList<PatternSource*>* src,
-		const PatternParams& p) :
-		PatternComposer(p),
+		const EList<PatternSource*>* src):
+		PatternComposer(),
 		cur_(0),
 		src_(src)
 	{
@@ -1107,9 +1106,8 @@ public:
 
 	DualPatternComposer(
 		const EList<PatternSource*>* srca,
-		const EList<PatternSource*>* srcb,
-		const PatternParams& p) :
-		PatternComposer(p), cur_(0), srca_(srca), srcb_(srcb)
+		const EList<PatternSource*>* srcb):
+		PatternComposer(), cur_(0), srca_(srca), srcb_(srcb)
 	{
 		assert(srca_ != NULL);
 		assert(srcb_ != NULL);

@@ -421,7 +421,7 @@ PatternComposer* PatternComposer::setupPatternComposer(
 	}
 
 	PatternComposer *patsrc = NULL;
-	patsrc = new DualPatternComposer(a, b, p);
+	patsrc = new DualPatternComposer(a, b);
 	return patsrc;
 }
 
