@@ -35,6 +35,7 @@
 #include <vector>
 #include <map>
 #include <queue>
+#include <atomic>
 #include "alphabet.h"
 #include "assert_helpers.h"
 #include "random_source.h"
@@ -1586,7 +1587,10 @@ class PatternSourceServiceFactory {
 public:
 	class ReadElement {
 	public:
-		PatternSourcePerThread *ps;  // not owned, just a pointer
+		// both of them are not owned, just pointers
+		PatternSourcePerThread *ps;
+		std::atomic<int> *pst_counter;
+
 		std::pair<bool, bool>   readResult;
 	};
 
@@ -1637,7 +1641,9 @@ public:
 	~PatternSourceServiceFactory() {
 		// TODO: Signal listent_ it is time to quit
 		listent_.join();
-		returnUnready(NULL); // this will signal readaheadt_ it is time to quit
+		ReadElement re;
+		re.ps = NULL; // this will signal readaheadt_ it is time to quit
+		returnUnready(re);
 		if (readaheadt_!=NULL) {
 			readaheadt_->join();
 			delete readaheadt_;
@@ -1649,12 +1655,8 @@ public:
 		return psq_ready_.pop();
 	}
 
-	void returnUnready(PatternSourcePerThread* ps) {
-		psq_idle_.push(ps);
-	}
-
 	void returnUnready(ReadElement& re) {
-		returnUnready(re.ps);
+		psq_idle_.push(re);
 	}
 
 private:
@@ -1697,19 +1699,19 @@ private:
 		std::queue<T> q_;
 	};
 
-	class LockedPSQueueCV : public LockedQueueCV<PatternSourcePerThread*> {
+	class LockedIdleQueueCV : public LockedQueueCV<ReadElement> {
 	public:
-		virtual ~LockedPSQueueCV() {
+		virtual ~LockedIdleQueueCV() {
 			while (!q_.empty()) {
-				delete q_.front();
+				delete q_.front().ps;
 				q_.pop();
 			}
 		}
 	};
 
-	class LockedREQueueCV : public LockedQueueCV<ReadElement> {
+	class LockedReadyQueueCV : public LockedQueueCV<ReadElement> {
 	public:
-		virtual ~LockedREQueueCV() {
+		virtual ~LockedReadyQueueCV() {
 			// we actually own ps while in the queue
 			while (!q_.empty()) {
 				delete q_.front().ps;
@@ -1782,11 +1784,10 @@ private:
 
 	// we still need the read-ahead logic, even though it is multiplexing over multiple connections
         static void readAsync(PatternSourceServiceFactory *obj) {
-		LockedREQueueCV &psq_ready = obj->psq_ready_;
-		LockedPSQueueCV &psq_idle = obj->psq_idle_;
+		LockedReadyQueueCV &psq_ready = obj->psq_ready_;
+		LockedIdleQueueCV  &psq_idle  = obj->psq_idle_;
                 while(true) {
-			ReadElement re;
-			re.ps = psq_idle.pop();
+			ReadElement re = psq_idle.pop();
 			if (re.ps==NULL) break; // the destructor added this in the queue
 
 			if (re.ps->nextReadPairReady()) {
@@ -1872,8 +1873,8 @@ private:
 	std::mutex m_;
 	PatternSourcePerThreadFactory psfact_;
 	const unsigned int n_readahead_;
-	LockedREQueueCV psq_ready_;
-	LockedPSQueueCV psq_idle_;
+	LockedReadyQueueCV psq_ready_;
+	LockedIdleQueueCV  psq_idle_;
 
 	std::map<int,std::thread *> clients_; 	// all active client threads
 	std::vector<std::thread *> finalizing_; // inactive threads that still need to joined

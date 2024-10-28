@@ -1935,11 +1935,16 @@ void PatternSourceServiceFactory::align(int fd) {
 	auto *ps = new TabbedSocketPatternSource(pp_, fd, msink);
 	comp_params->push_back(ps);
 	SoloPatternComposer fd_composer(comp_params);
+	std::atomic<int> pst_counter(0);
 	// comp_params, ps and content now owned by fd_composer, and will be cleaned up by it
 
 	for (unsigned int i=0; i<n_readahead_; i++) {
-		auto *pst = new PatternSourcePerThread(fd_composer, pp_);
-		psq_idle_.push(pst);
+		ReadElement re;
+		re.ps = new PatternSourcePerThread(fd_composer, pp_);
+		re.pst_counter = &pst_counter;
+		// re.readResult not significant while in psq_idle
+		pst_counter++;
+		psq_idle_.push(re);
 	}
 #if 0
 		fd_composer.wait_client_done(fd); // TODO
@@ -1952,6 +1957,8 @@ void PatternSourceServiceFactory::align(int fd) {
 				fprintf(stderr,"PatternSourceServiceFactory::Client> POST reply2 %i\n",fd);
 		}
 #endif
+	// wait for all the content to be processed
+	while (pst_counter > 0) sleep(0.1); // we expect the processing to last a long time, so lazy polling is OK
 }
 
 void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *obj, int client_fd) {
