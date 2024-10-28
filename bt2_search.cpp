@@ -64,6 +64,12 @@
 
 using namespace std;
 
+#if 0
+typedef PatternSourceReadAheadFactory PSFactory;
+#else
+typedef PatternSourceServiceFactory PSFactory;
+#endif
+
 static int FNAME_SIZE;
 static std::atomic<int> thread_counter;
 static EList<string> mates1;  // mated reads (first mate)
@@ -1823,7 +1829,7 @@ createPatsrcFactory(
 
 #define PTHREAD_ATTRS (PTHREAD_CREATE_JOINABLE | PTHREAD_CREATE_DETACHED)
 
-static PatternSourceReadAheadFactory* multiseed_readahead_factory;
+static PSFactory* multiseed_readahead_factory;
 static Ebwt*                    multiseed_ebwtFw;
 static Ebwt*                    multiseed_ebwtBw;
 static Scoring*                 multiseed_sc;
@@ -3013,7 +3019,7 @@ static void multiseedSearchWorker(void *vp) {
 	int tid = p->tid;
 	assert(multiseed_ebwtFw != NULL);
 	assert(multiseedMms == 0 || multiseed_ebwtBw != NULL);
-	PatternSourceReadAheadFactory& readahead_factory =  *multiseed_readahead_factory;
+	PSFactory& readahead_factory =  *multiseed_readahead_factory;
 	const Ebwt&             ebwtFw   = *multiseed_ebwtFw;
 	const Ebwt*             ebwtBw   = multiseed_ebwtBw;
 	const Scoring&          sc       = *multiseed_sc;
@@ -3158,7 +3164,7 @@ static void multiseedSearchWorker(void *vp) {
 		int mergeival = 16;
 		bool done = false;
 		while(!done) {
-		   PatternSourceReadAheadFactory::ReadAhead psrah(readahead_factory);
+	   	   PSFactory::ReadAhead psrah(readahead_factory);
 		   PatternSourcePerThread* const ps = psrah.ptr();
                    do {
 			pair<bool, bool> ret = psrah.nextReadResult();
@@ -4163,7 +4169,7 @@ static void multiseedSearchWorker_2p5(void *vp) {
 	int tid = p->tid;
 	assert(multiseed_ebwtFw != NULL);
 	assert(multiseedMms == 0 || multiseed_ebwtBw != NULL);
-	PatternSourceReadAheadFactory& readahead_factory =  *multiseed_readahead_factory;
+	PSFactory& readahead_factory =  *multiseed_readahead_factory;
 	const Ebwt&             ebwtFw   = *multiseed_ebwtFw;
 	const Ebwt&             ebwtBw   = *multiseed_ebwtBw;
 	const Scoring&          sc       = *multiseed_sc;
@@ -4271,7 +4277,7 @@ static void multiseedSearchWorker_2p5(void *vp) {
 	int mergei = 0;
 	int mergeival = 16;
 	while(true) {
-	   PatternSourceReadAheadFactory::ReadAhead psrah(readahead_factory);
+	   PSFactory::ReadAhead psrah(readahead_factory);
 	   PatternSourcePerThread* const ps = psrah.ptr();
 	   do {
 		pair<bool, bool> ret = psrah.nextReadResult();
@@ -4720,7 +4726,11 @@ static void multiseedSearch(
 	EList<std::thread*> threads(nthreads);
 	EList<thread_tracking_pair> tps;
 	// Important: Need at least nthreads+1 elements, more is OK
+#if 0
 	PatternSourceReadAheadFactory readahead_factory(patsrc,pp,4*nthreads+1);
+#else
+	PatternSourceServiceFactory readahead_factory(patsrc,pp,4*nthreads+1, multiseed_msink);
+#endif
 	multiseed_readahead_factory = &readahead_factory;
 
 	tps.resize(std::max(nthreads, thread_ceiling));
