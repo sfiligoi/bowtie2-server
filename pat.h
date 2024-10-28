@@ -1324,6 +1324,24 @@ public:
 		std::pair<bool, bool>   readResult;
 	};
 
+	// Simple wrapper for safely holding the result of PatternSourceReadAheadFactory
+	class ReadAhead {
+	public:
+		ReadAhead(PatternSourceReadAheadFactory& fact) :
+			fact_(fact),
+			re_(fact.nextReadPair()) {}
+
+		~ReadAhead() {
+			fact_.returnUnready(re_);
+		}
+
+		const std::pair<bool, bool>& readResult() const { return re_.readResult;}
+		PatternSourcePerThread* ptr() {return re_.ps;}
+	private:
+		PatternSourceReadAheadFactory& fact_;
+		PatternSourceReadAheadFactory::ReadElement re_;
+	};
+
 	PatternSourceReadAheadFactory(
 		PatternComposer& composer,
 		const PatternParams& pp, size_t n) :
@@ -1435,24 +1453,6 @@ private:
 	LockedREQueue psq_ready_;
 	LockedPSQueue psq_idle_;
 	std::thread asynct_;
-};
-
-// Simple wrapper for safely holding the result of PatternSourceReadAheadFactory
-class PatternSourceReadAhead {
-public:
-	PatternSourceReadAhead(PatternSourceReadAheadFactory& fact) :
-		fact_(fact),
-		re_(fact.nextReadPair()) {}
-
-	~PatternSourceReadAhead() {
-		fact_.returnUnready(re_);
-	}
-
-	const std::pair<bool, bool>& readResult() const { return re_.readResult;}
-	PatternSourcePerThread* ptr() {return re_.ps;}
-private:
-	PatternSourceReadAheadFactory& fact_;
-	PatternSourceReadAheadFactory::ReadElement re_;
 };
 
 #ifdef USE_SRA

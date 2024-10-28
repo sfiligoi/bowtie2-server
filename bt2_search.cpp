@@ -3158,7 +3158,7 @@ static void multiseedSearchWorker(void *vp) {
 		int mergeival = 16;
 		bool done = false;
 		while(!done) {
-		   PatternSourceReadAhead psrah(readahead_factory);
+		   PatternSourceReadAheadFactory::ReadAhead psrah(readahead_factory);
 		   PatternSourcePerThread* const ps = psrah.ptr();
 		   bool firstPS = true;
                    do {
@@ -4275,7 +4275,7 @@ static void multiseedSearchWorker_2p5(void *vp) {
 	int mergei = 0;
 	int mergeival = 16;
 	while(true) {
-	   PatternSourceReadAhead psrah(readahead_factory);
+	   PatternSourceReadAheadFactory::ReadAhead psrah(readahead_factory);
 	   PatternSourcePerThread* const ps = psrah.ptr();
 	   do {
 		pair<bool, bool> ret = ps->nextReadPair();
