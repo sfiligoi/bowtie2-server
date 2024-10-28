@@ -1622,16 +1622,15 @@ public:
 	PatternSourceServiceFactory(
 		PatternComposer& composer,
 		const PatternParams& pp, size_t n_readahead,
-		AlnSink* msink,
-		bool useCV=true) :
+		AlnSink* msink):
 		server_port_(3333),
 		server_backlog(128),
 		pp_(pp),
 		msink_(msink),
 		psfact_(composer,pp),
 		n_readahead_(n_readahead),
-		psq_ready_(useCV),
-		psq_idle_(useCV),
+		psq_ready_(),
+		psq_idle_(),
 		readaheadt_(NULL),
 		listent_(acceptConnections, this) {}
 
@@ -1719,112 +1718,6 @@ private:
 		}
 	};
 
-	template <typename T>
-	class LockedQueueMC {
-	public:
-		virtual ~LockedQueueMC() {}
-
-		bool empty() {
-			return q_.size_approx() == 0;
-		}
-
-		void push(T& ps) {
-			q_.enqueue(ps);
-		}
-
-		// wait for data, if none in the queue
-		T pop() {
-			T ret;
-
-			while (!q_.try_dequeue(ret)) ;
-			return ret;
-		}
-
-	protected:
-		ConcurrentQueue<T> q_;
-	};
-
-	class LockedPSQueueMC: public LockedQueueMC<PatternSourcePerThread*> {
-	public:
-		virtual ~LockedPSQueueMC() {
-			PatternSourcePerThread *item;
-
-			while (q_.size_approx() != 0) {
-				while (!q_.try_dequeue(item)) ;
-				delete item;
-			}
-		}
-
-	};
-
-	class LockedREQueueMC : public LockedQueueMC<ReadElement> {
-	public:
-		virtual ~LockedREQueueMC() {
-			// we actually own ps while in the queue
-			ReadElement item;
-
-			while (q_.size_approx() != 0) {
-				while (!q_.try_dequeue(item)) ;
-				delete item.ps;
-			}
-
-		}
-	};
-
-	template <typename T, typename Q1, typename Q2>
-	class LockedQueueDuo {
-	public:
-		LockedQueueDuo(Q1 *pq1, Q2 *pq2) 
-		: pq1_(pq1), pq2_(pq2)
-		{
-			assert( (pq1_!=NULL) || (pq2_!=NULL) );
-		}
-
-		virtual ~LockedQueueDuo() {
-			if (pq1_!=NULL) delete pq1_;
-			if (pq2_!=NULL) delete pq2_;
-		}
-
-		bool empty() {
-			return (pq1_!=NULL) ? pq1_->empty() : pq2_->empty();
-		}
-
-		void push(T& ps) {
-			if (pq1_!=NULL) {
-				pq1_->push(ps);
-			} else {
-				pq2_->push(ps);
-			}
-		}
-
-		T pop() {
-			return (pq1_!=NULL) ? pq1_->pop() : pq2_->pop();
-		}
-
-	protected:
-		// owned, and exactly one should be not NULL
-		Q1 *pq1_;
-		Q2 *pq2_;
-	};
-
-	class LockedPSQueue: public LockedQueueDuo<PatternSourcePerThread*, LockedPSQueueCV, LockedPSQueueMC> {
-	public:
-		LockedPSQueue(bool useCV) : 
-			LockedQueueDuo<PatternSourcePerThread*, LockedPSQueueCV, LockedPSQueueMC>(
-				useCV ? new LockedPSQueueCV() : NULL,
-				useCV ? NULL : new LockedPSQueueMC()
-			) {}
-	};
-
-	class LockedREQueue: public LockedQueueDuo<ReadElement, LockedREQueueCV, LockedREQueueMC> {
-	public:
-		LockedREQueue(bool useCV) : 
-			LockedQueueDuo<ReadElement, LockedREQueueCV, LockedREQueueMC>(
-				useCV ? new LockedREQueueCV() : NULL,
-				useCV ? NULL : new LockedREQueueMC()
-			) {}
-	};
-
 	// write a string with retries, but silently abort on error
 	static void try_write_str(int fd, const char *str) {
 		int len = strlen(str);
@@ -1889,8 +1782,8 @@ private:
 
 	// we still need the read-ahead logic, even though it is multiplexing over multiple connections
         static void readAsync(PatternSourceServiceFactory *obj) {
-		LockedREQueue &psq_ready = obj->psq_ready_;
-		LockedPSQueue &psq_idle = obj->psq_idle_;
+		LockedREQueueCV &psq_ready = obj->psq_ready_;
+		LockedPSQueueCV &psq_idle = obj->psq_idle_;
                 while(true) {
 			ReadElement re;
 			re.ps = psq_idle.pop();
@@ -1979,8 +1872,8 @@ private:
 	std::mutex m_;
 	PatternSourcePerThreadFactory psfact_;
 	const unsigned int n_readahead_;
-	LockedREQueue psq_ready_;
-	LockedPSQueue psq_idle_;
+	LockedREQueueCV psq_ready_;
+	LockedPSQueueCV psq_idle_;
 
 	std::map<int,std::thread *> clients_; 	// all active client threads
 	std::vector<std::thread *> finalizing_; // inactive threads that still need to joined
