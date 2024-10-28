@@ -1541,7 +1541,9 @@ pair<bool, int> TabbedPatternSource::nextBatchFromFile(
 /**
  * Finalize tabbed parsing outside critical section.
  */
-bool TabbedPatternSource::parse(Read& ra, Read& rb, TReadId rdid) const {
+inline bool tabbed_parse(Read& ra, Read& rb,
+			const bool secondName,
+			const PatternParams& p) {
 	// Light parser (nextBatchFromFile) puts unparsed data
 	// into Read& r, even when the read is paired.
 	assert(ra.empty());
@@ -1558,7 +1560,7 @@ bool TabbedPatternSource::parse(Read& ra, Read& rb, TReadId rdid) const {
 		assert(r.name.empty());
 		// Parse name if (a) this is the first end, or
 		// (b) this is tab6
-		if(endi < 1 || secondName_) {
+		if(endi < 1 || secondName) {
 			// Parse read name
 			c = ra.readOrigBuf[cur++];
 			while(c != '\t' && cur < buflen) {
@@ -1582,7 +1584,7 @@ bool TabbedPatternSource::parse(Read& ra, Read& rb, TReadId rdid) const {
 		while(c != '\t' && cur < buflen) {
 			if(isalpha(c)) {
 				assert_in(toupper(c), "ACGTN");
-				if(nchar++ >= pp_.trim5) {
+				if(nchar++ >= p.trim5) {
 					assert_neq(0, asc2dnacat[c]);
 					r.patFw.append(asc2dna[c]); // ascii to int
 				}
@@ -1596,23 +1598,23 @@ bool TabbedPatternSource::parse(Read& ra, Read& rb, TReadId rdid) const {
 		// record amt trimmed from 5' end due to --trim5
 		r.trimmed5 = (int)(nchar - r.patFw.length());
 		// record amt trimmed from 3' end due to --trim3
-		r.trimmed3 = (int)(r.patFw.trimEnd(pp_.trim3));
+		r.trimmed3 = (int)(r.patFw.trimEnd(p.trim3));
 
 		// Parse qualities
 		assert(r.qual.empty());
 		c = ra.readOrigBuf[cur++];
 		int nqual = 0;
-		if (pp_.intQuals) {
+		if (p.intQuals) {
 			int cur_int = 0;
 			while(c != '\t' && c != '\n' && c != '\r' && cur < buflen) {
 				cur_int *= 10;
 				cur_int += (int)(c - '0');
 				c = ra.readOrigBuf[cur++];
 				if(c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-					char cadd = intToPhred33(cur_int, pp_.solexa64);
+					char cadd = intToPhred33(cur_int, p.solexa64);
 					cur_int = 0;
 					assert_geq(cadd, 33);
-					if(++nqual > pp_.trim5) {
+					if(++nqual > p.trim5) {
 						r.qual.append(cadd);
 					}
 				}
@@ -1623,8 +1625,8 @@ bool TabbedPatternSource::parse(Read& ra, Read& rb, TReadId rdid) const {
 					wrongQualityFormat(r.name);
 					return false;
 				}
-				char cadd = charToPhred33(c, pp_.solexa64, pp_.phred64);
-				if(++nqual > pp_.trim5) {
+				char cadd = charToPhred33(c, p.solexa64, p.phred64);
+				if(++nqual > p.trim5) {
 					r.qual.append(cadd);
 				}
 				if(cur >= buflen) break;
@@ -1638,11 +1640,18 @@ bool TabbedPatternSource::parse(Read& ra, Read& rb, TReadId rdid) const {
 			tooManyQualities(r.name);
 			return false;
 		}
-		r.qual.trimEnd(pp_.trim3);
+		r.qual.trimEnd(p.trim3);
 		assert(c == '\t' || c == '\n' || c == '\r' || cur >= buflen);
 		assert_eq(r.patFw.length(), r.qual.length());
 	}
 	return true;
+}
+
+/**
+ * Finalize tabbed parsing outside critical section.
+ */
+bool TabbedPatternSource::parse(Read& ra, Read& rb, TReadId rdid) const {
+	return tabbed_parse(ra, rb, secondName_, pp_);
 }
 
 /**
