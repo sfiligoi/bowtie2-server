@@ -1834,7 +1834,6 @@ int PatternSourceServiceFactory::start_listening(int port, int backlog) {
 		return -1;
 	}
 
-	fprintf(stderr,"PatternSourceServiceFactory> Listening\n");
 	return server_fd;
 }
 
@@ -1929,7 +1928,6 @@ void PatternSourceServiceFactory::reply_config(int fd) {
 // We only paritally parsed the header
 // buf contains what we read from fd so far
 void PatternSourceServiceFactory::align(int fd) {
-	fprintf(stderr, "In PatternSourceServiceFactory::align\n");
 	AlnSink        *msink = msink_; // Quick hack, use global msink
 	EList<PatternSource*>* comp_params  = new EList<PatternSource*>();
 	auto *ps = new TabbedSocketPatternSource(pp_, fd, msink);
@@ -1939,10 +1937,7 @@ void PatternSourceServiceFactory::align(int fd) {
 	// comp_params, ps and content now owned by fd_composer, and will be cleaned up by it
 
 	for (unsigned int i=0; i<n_readahead_; i++) {
-		ReadElement re;
-		re.ps = new PatternSourcePerThread(fd_composer, pp_);
-		re.pst_counter = &pst_counter;
-		// re.readResult not significant while in psq_idle
+		ReadElement re(new PatternSourcePerThread(fd_composer, pp_), &pst_counter);
 		pst_counter++;
 		psq_idle_.push(re);
 	}
@@ -1958,11 +1953,10 @@ void PatternSourceServiceFactory::align(int fd) {
 		}
 #endif
 	// wait for all the content to be processed
-	while (pst_counter > 0) sleep(0.1); // we expect the processing to last a long time, so lazy polling is OK
+	while (pst_counter.load() > 0) sleep(0.1); // we expect the processing to last a long time, so lazy polling is OK
 }
 
 void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *obj, int client_fd) {
-	fprintf(stderr,"PatternSourceServiceFactory::Client> Serving new connection %i\n",client_fd);
 	{
 		char buf[24]; // we just need the header at this point
 		int nels = ::read(client_fd, buf, 20); // do not read past the align header end
@@ -1987,14 +1981,11 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 			// request for alignment
 			// read the remaining header, so client_fd it is ready for the payload
 			if (read_header(client_fd, buf, nels)) {
-				fprintf(stderr,"PatternSourceServiceFactory::Client> POST on %i\n",client_fd);
 				if (write_str(client_fd,"HTTP/1.0 200 OK\n\n")) {
-					fprintf(stderr,"PatternSourceServiceFactory::Client> POST reply1 %i\n",client_fd);
 					// the align method will keep reading the input
 					obj->align(client_fd);
 				}
 				// if initial write failed, just abort
-				fprintf(stderr,"PatternSourceServiceFactory::Client> Ending POS %i\n",client_fd);
 			} else {
 				// something went wrong in parsing the header, try to notify sender
 				try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
@@ -2012,7 +2003,6 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 			// just drop connecton, we do not know if it is even a valid header
 		}
 	}
-	fprintf(stderr,"PatternSourceServiceFactory::Client> Ending connection %i\n",client_fd);
 
 	obj->finalize_client(client_fd);
 }

@@ -1587,11 +1587,44 @@ class PatternSourceServiceFactory {
 public:
 	class ReadElement {
 	public:
+		// Nothing read yet
+		ReadElement(PatternSourcePerThread *ps_, std::atomic<int> *pst_counter_) :
+			ps(ps_),
+			pst_counter(pst_counter_),
+			readResult(make_pair(false, false)),
+			lastBatch_(false)	{}
+
+		// final, invalid one
+		ReadElement(void *dummy) :
+			ps(NULL) {}
+
+		// we allow the object to be moved around
+		ReadElement(const ReadElement& other) = default;
+		ReadElement(ReadElement&& other) = default;
+
+		void nextReadPair() {
+			readResult = ps->nextReadPair();
+			handleLast();
+		}
+
+		bool isLast() const { return lastBatch_;}
+
 		// both of them are not owned, just pointers
 		PatternSourcePerThread *ps;
 		std::atomic<int> *pst_counter;
 
 		std::pair<bool, bool>   readResult;
+	private:
+		void handleLast() {
+			bool lastBatch = readResult.second;
+			if(lastBatch) {
+				// Do not expose it to the main loop, it is internal info
+				readResult.second = false;
+				lastBatch_ = true;
+			}
+		}
+
+		bool lastBatch_;
 	};
 
 	// Simple wrapper for safely holding the result of PatternSourceServiceFactory
@@ -1611,7 +1644,7 @@ public:
 				// nextReadPair was already called in the psrah constructor
 				first_ = false;
 			} else {
-				re_.readResult = re_.ps->nextReadPair();
+				re_.nextReadPair();
 			}
 			return re_.readResult;
 		}
@@ -1641,8 +1674,7 @@ public:
 	~PatternSourceServiceFactory() {
 		// TODO: Signal listent_ it is time to quit
 		listent_.join();
-		ReadElement re;
-		re.ps = NULL; // this will signal readaheadt_ it is time to quit
+		ReadElement re(NULL); // this will signal readaheadt_ it is time to quit
 		returnUnready(re);
 		if (readaheadt_!=NULL) {
 			readaheadt_->join();
@@ -1656,7 +1688,13 @@ public:
 	}
 
 	void returnUnready(ReadElement& re) {
-		psq_idle_.push(re);
+		if (re.isLast()) {
+			// Nothing more to do with this one, cleanup
+			delete re.ps;
+			(*re.pst_counter)--;
+		} else {
+			psq_idle_.push(re);
+		}
 	}
 
 private:
@@ -1683,13 +1721,10 @@ private:
 
 		// wait for data, if none in the queue
 		T pop() {
-			T ret;
-			{
-				std::unique_lock<std::mutex> lk(m_);
-				cv_.wait(lk, [this] { return !q_.empty();});
-				ret = q_.front();
-				q_.pop();
-			}
+			std::unique_lock<std::mutex> lk(m_);
+			cv_.wait(lk, [this] { return !q_.empty();});
+			T ret(q_.front());
+			q_.pop();
 			return ret;
 		}
 
@@ -1787,14 +1822,25 @@ private:
 		LockedReadyQueueCV &psq_ready = obj->psq_ready_;
 		LockedIdleQueueCV  &psq_idle  = obj->psq_idle_;
                 while(true) {
-			ReadElement re = psq_idle.pop();
+			ReadElement re(psq_idle.pop());
 			if (re.ps==NULL) break; // the destructor added this in the queue
 
 			if (re.ps->nextReadPairReady()) {
 				// Should never get in here, but just in case
-				re.readResult = make_pair(true, false);
+				re.readResult = make_pair(false, false);
 			} else {
-				re.readResult = re.ps->nextReadPair();
+				re.nextReadPair();
+			}
+
+			if (re.isLast()) {
+			  bool success = re.readResult.first;
+			  if(!success) {
+				// Nothing more to do with this one, cleanup
+				delete re.ps;
+				(*re.pst_counter)--;
+				continue;
+			  }
+			  // else let it go through, so it can be processed
 			}
 			psq_ready.push(re);
                 }
@@ -1856,12 +1902,9 @@ private:
 				if ((errno==EINVAL)|(errno==EBADF)) server_err = true; // abort only on catastrophic problems
 				continue;
 			}
-			fprintf(stderr,"PatternSourceServiceFactory> New connection\n");
 			obj->add_client(client_fd);
                 }
-		fprintf(stderr,"PatternSourceServiceFactory> Shutting down\n");
 		obj->final_wait_clients();
-		fprintf(stderr,"PatternSourceServiceFactory> Done\n");
 		close(server_fd);
 	}
 
