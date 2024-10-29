@@ -1595,17 +1595,28 @@ public:
 	public:
 		ReadAhead(PatternSourceServiceFactory& fact) :
 			fact_(fact),
-			re_(fact.nextReadPair()) {}
+			re_(fact.nextReadPair()),
+			first_(true)	{}
 	
 		~ReadAhead() {
 			fact_.returnUnready(re_);
 		}
 
-		const std::pair<bool, bool>& readResult() const { return re_.readResult;}
+		const std::pair<bool, bool>& nextReadResult() {
+			if (first_) {
+				// nextReadPair was already called in the psrah constructor
+				first_ = false;
+			} else {
+				re_.readResult = re_.ps->nextReadPair();
+			}
+			return re_.readResult;
+		}
+
 		PatternSourcePerThread* ptr() {return re_.ps;}
 	private:
 		PatternSourceServiceFactory& fact_;
 		PatternSourceServiceFactory::ReadElement re_;
+		bool first_;
 	};
 
 	PatternSourceServiceFactory(
