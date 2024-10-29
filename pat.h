@@ -26,8 +26,6 @@
 #include <condition_variable>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
 #include <zlib.h>
 #include <cassert>
 #include <string>
@@ -72,6 +70,7 @@
 // full definition in aln_sink.h
 // but we only need the pointer here
 class AlnSink;
+class AlnSinkSam;
 
 /**
  * Classes and routines for reading reads from various input sources.
@@ -1673,11 +1672,11 @@ public:
 	PatternSourceServiceFactory(
 		PatternComposer& composer,
 		const PatternParams& pp, size_t n_readahead,
-		AlnSink* msink):
+		AlnSinkSam &msink):
 		server_port_(3333),
 		server_backlog(128),
 		pp_(pp),
-		msink_(msink),
+		template_msink_(msink),
 		psfact_(composer,pp),
 		n_readahead_(n_readahead),
 		psq_ready_(),
@@ -1856,37 +1855,19 @@ private:
 			finalizing_.push_back(client_t);
 		}
 		// close after erase, so it does not get resued by the system
-		close(client_fd);
+		close_socket(client_fd);
+		//fprintf(stderr,"PatternSourceServiceFactory::Client> Closed connection %i\n",client_fd);
 	}
 
         static int start_listening(int port, int backlog);
+	static void close_socket(int fd);
 
-        static void acceptConnections(PatternSourceServiceFactory *obj) {
-		const int server_fd = start_listening(obj->server_port_, obj->server_backlog);
-		if (server_fd==-1) {
-			// TODO: report error
-			return;
-		}
-		bool server_err = false;
-                while(!server_err) {
-			obj->maintain_clients(); // do some maintenance once in a while
-			struct sockaddr_in client_addr;
-			socklen_t client_addr_len = sizeof(client_addr);
-			int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_addr_len);
-			if (client_fd==-1) {
-				if ((errno==EINVAL)|(errno==EBADF)) server_err = true; // abort only on catastrophic problems
-				continue;
-			}
-			obj->add_client(client_fd);
-                }
-		obj->final_wait_clients();
-		close(server_fd);
-	}
+        static void acceptConnections(PatternSourceServiceFactory *obj);
 
 	const int server_port_;
 	const int server_backlog;
 	const PatternParams& pp_;
-	AlnSink* msink_;
+	AlnSinkSam& template_msink_;
 
 	std::mutex m_;
 	PatternSourcePerThreadFactory psfact_;

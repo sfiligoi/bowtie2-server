@@ -663,6 +663,23 @@ public:
 	}
 
 	/**
+	 * Open a new output stream to a file with given name.
+	 */
+	OutFileBuf(int fd, bool binary = false) :
+		name_("c file"), out_(NULL), cur_(0), closed_(false),
+		asyncData_(out_), asynct_(writeAsync, &asyncData_),
+		buf1_(new char[BUF_SZ]), buf2_(new char[BUF_SZ]), cap1_(BUF_SZ), cap2_(BUF_SZ),
+		buf_(buf1_), cap_(cap1_)
+	{
+		int myfd = dup(fd);
+		out_ = fdopen(myfd, binary ? "wb" : "w");
+		if(out_ == NULL) {
+			std::cerr << "Error: Could not open alignment on fd " << fd << std::endl;
+			throw 1;
+		}
+	}
+
+	/**
 	 * Open a new output stream to standard out.
 	 */
 	OutFileBuf() :

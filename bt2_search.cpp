@@ -4688,7 +4688,7 @@ static void multiseedSearch(
 	Scoring& sc,
 	const PatternParams& pp,
 	PatternComposer& patsrc,      // pattern source
-	AlnSink& msink,               // hit sink
+	AlnSinkSam& msink,               // hit sink
 	Ebwt& ebwtFw,                 // index of original text
 	Ebwt* ebwtBw,                 // index of mirror text
 	OutFileBuf *metricsOfb)
@@ -4729,7 +4729,7 @@ static void multiseedSearch(
 #if 0
 	PatternSourceReadAheadFactory readahead_factory(patsrc,pp,4*nthreads+1);
 #else
-	PatternSourceServiceFactory readahead_factory(patsrc,pp,4*nthreads+1, multiseed_msink);
+	PatternSourceServiceFactory readahead_factory(patsrc,pp,4*nthreads+1, msink);
 #endif
 	multiseed_readahead_factory = &readahead_factory;
 
@@ -5010,7 +5010,7 @@ static void driver(
 		// Set up hit sink; if sanityCheck && !os.empty() is true,
 		// then instruct the sink to "retain" hits in a vector in
 		// memory so that we can easily sanity check them later on
-		AlnSink *mssink = NULL;
+		AlnSinkSam *mssink = NULL;
 		switch(outType) {
 		case OUTPUT_SAM: {
 			mssink = new AlnSinkSam(

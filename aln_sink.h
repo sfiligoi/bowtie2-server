@@ -604,6 +604,14 @@ public:
 		quiet_(quiet)
 	{ }
 
+	explicit AlnSink(
+		const AlnSink& other,
+		OutputQueue& oq):
+		oq_(oq),
+		refnames_(other.refnames_),
+		quiet_(other.quiet_)
+	{ }
+
 	/**
 	 * Destroy HitSinkobject;
 	 */
@@ -1305,6 +1313,21 @@ public:
 			refnames,
 			quiet),
 		samc_(samc)
+	{ }
+
+	AlnSinkSam(
+		const AlnSink& other,
+		OutputQueue&     oq,           // output queue
+		const SamConfig& samc):         // settings & routines for SAM output
+		AlnSink(other, oq),
+		samc_(samc)
+	{ }
+
+	AlnSinkSam(
+		const AlnSinkSam& other,
+		OutputQueue&     oq):           // output queue
+		AlnSink(other, oq),
+		samc_(other.samc_)
 	{ }
 
 	virtual ~AlnSinkSam() { }

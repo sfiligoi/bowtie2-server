@@ -26,6 +26,8 @@
 #include <string.h>
 #include <fcntl.h>
 #include "sstring.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 #include "pat.h"
 #include "filebuf.h"
@@ -34,6 +36,7 @@
 #include "str_util.h"
 #include "tokenize.h"
 #include "endian_swap.h"
+#include "aln_sink.h"
 
 using namespace std;
 
@@ -1837,6 +1840,46 @@ int PatternSourceServiceFactory::start_listening(int port, int backlog) {
 	return server_fd;
 }
 
+void PatternSourceServiceFactory::close_socket(int fd) {
+	// in order to not lose any buffered data
+	// tell the client the socket is closing
+	// and there will be no more data coming its way
+	shutdown(fd, SHUT_WR);
+	// now wait for the client to close its side...
+	// by trying to read from its socket
+	// throw away any leftover data we may find
+	char buf[68]; // I expect the data to be small
+	while (true) {
+		int nels = ::read(fd, buf, 64);
+		if (nels<1) break;
+	}
+	// we can fully close the socket now
+	::close(fd);
+}
+
+void PatternSourceServiceFactory::acceptConnections(PatternSourceServiceFactory *obj) {
+	const int server_fd = start_listening(obj->server_port_, obj->server_backlog);
+	if (server_fd==-1) {
+		// TODO: report error
+		return;
+	}
+	bool server_err = false;
+               while(!server_err) {
+		obj->maintain_clients(); // do some maintenance once in a while
+		struct sockaddr_in client_addr;
+		socklen_t client_addr_len = sizeof(client_addr);
+		int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_addr_len);
+		if (client_fd==-1) {
+			if ((errno==EINVAL)|(errno==EBADF)) server_err = true; // abort only on catastrophic problems
+			continue;
+		}
+		//fprintf(stderr,"PatternSourceServiceFactory> New connection\n");
+		obj->add_client(client_fd);
+               }
+	obj->final_wait_clients();
+	close(server_fd);
+}
+
 // read until \n\n detected, discard content
 // can go over \n\n
 void PatternSourceServiceFactory::finish_header_read(int fd, char *init_buf, int init_len) {
@@ -1928,12 +1971,26 @@ void PatternSourceServiceFactory::reply_config(int fd) {
 // We only paritally parsed the header
 // buf contains what we read from fd so far
 void PatternSourceServiceFactory::align(int fd) {
+   {
 	LockedReadyQueueCV &psq_ready = psq_ready_;   // the ready queue is shared, so the main loop can access it
 	LockedIdleQueueCV   psq_idle;  // the idle queue is private, so we have one listener x fd
 
-	AlnSink        *msink = msink_; // Quick hack, use global msink
+	const int readsPerBatch = 16; // TODO: Should it be dynamic?
+	const bool reorder = false;   // TODO: Get it from the header
+ 	const int nthreads = template_msink_.outq().numThreads(); // use the same as the global one
+
+	OutFileBuf fout(fd);
+	OutputQueue oq(
+                fout,                            // out file buffer
+                reorder,                         // whether to reorder
+                nthreads,                        // # threads
+                true,                            // whether to be thread-safe
+                readsPerBatch,                   // size of output buffer of reads
+                0); // no reason to skip reads
+	AlnSinkSam msink(template_msink_, oq);
+
 	EList<PatternSource*>* comp_params  = new EList<PatternSource*>();
-	auto *ps = new TabbedSocketPatternSource(pp_, fd, msink);
+	auto *ps = new TabbedSocketPatternSource(pp_, fd, &msink);
 	comp_params->push_back(ps);
 	SoloPatternComposer fd_composer(comp_params);
 	int pst_counter = 0;;
@@ -1956,6 +2013,7 @@ void PatternSourceServiceFactory::align(int fd) {
 
 		if (re.ps->nextReadPairReady()) {
 			// Should never get in here, but just in case
+			fprintf(stderr, "WARN: nextReadPairReady returned false\n");
 			re.readResult = make_pair(false, false);
 		} else {
 			re.nextReadPair();
@@ -1973,6 +2031,10 @@ void PatternSourceServiceFactory::align(int fd) {
 		}
 		psq_ready.push(re);
 	}
+
+	oq.flush(true);
+   }
+   fsync(fd);
 }
 
 void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *obj, int client_fd) {
@@ -2000,6 +2062,7 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 			// request for alignment
 			// read the remaining header, so client_fd it is ready for the payload
 			if (read_header(client_fd, buf, nels)) {
+				//fprintf(stderr,"PatternSourceServiceFactory::Client> POST on %i\n",client_fd);
 				if (write_str(client_fd,"HTTP/1.0 200 OK\n\n")) {
 					// the align method will keep reading the input
 					obj->align(client_fd);
