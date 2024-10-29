@@ -3160,12 +3160,8 @@ static void multiseedSearchWorker(void *vp) {
 		while(!done) {
 		   PatternSourceReadAheadFactory::ReadAhead psrah(readahead_factory);
 		   PatternSourcePerThread* const ps = psrah.ptr();
-		   bool firstPS = true;
                    do {
-			pair<bool, bool> ret = firstPS ? 
-						psrah.readResult() : // nextReadPair was already called in the psrah constructor
-						ps->nextReadPair();
-			firstPS = false;
+			pair<bool, bool> ret = psrah.nextReadResult();
 			bool success = ret.first;
 			done = ret.second;
 			if(!success && done) {
@@ -4278,7 +4274,7 @@ static void multiseedSearchWorker_2p5(void *vp) {
 	   PatternSourceReadAheadFactory::ReadAhead psrah(readahead_factory);
 	   PatternSourcePerThread* const ps = psrah.ptr();
 	   do {
-		pair<bool, bool> ret = ps->nextReadPair();
+		pair<bool, bool> ret = psrah.nextReadResult();
 		bool success = ret.first;
 		bool done = ret.second;
 		if(!success && done) {
