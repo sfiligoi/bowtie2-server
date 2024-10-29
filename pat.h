@@ -1584,19 +1584,22 @@ private:
 };
 
 class PatternSourceServiceFactory {
+private:
+	class LockedIdleQueueCV;
 public:
 	class ReadElement {
 	public:
 		// Nothing read yet
-		ReadElement(PatternSourcePerThread *ps_, std::atomic<int> *pst_counter_) :
+		ReadElement(PatternSourcePerThread *ps_, PatternSourceServiceFactory::LockedIdleQueueCV&   psq_idle) :
 			ps(ps_),
-			pst_counter(pst_counter_),
 			readResult(make_pair(false, false)),
+			psq_idle_(psq_idle),
 			lastBatch_(false)	{}
 
 		// final, invalid one
-		ReadElement(void *dummy) :
-			ps(NULL) {}
+		ReadElement(PatternSourceServiceFactory::LockedIdleQueueCV&   psq_idle) :
+			ps(NULL),
+	       		psq_idle_(psq_idle)	{}
 
 		// we allow the object to be moved around
 		ReadElement(const ReadElement& other) = default;
@@ -1607,12 +1610,22 @@ public:
 			handleLast();
 		}
 
+		// Service-internal last flag
 		bool isLast() const { return lastBatch_;}
 
-		// both of them are not owned, just pointers
-		PatternSourcePerThread *ps;
-		std::atomic<int> *pst_counter;
+		void returnUnready() {
+			if (lastBatch_) {
+				// Nothing more to do with this one, cleanup
+				if(ps!=NULL) delete ps;
+				// inject NULL RE for proper handling in accept
+				ps = NULL;
+			}
+			psq_idle_.push(*this);
+		}
 
+		// not owned owned by the object, just pointer
+		// cleanup may still be needed on some actions
+		PatternSourcePerThread *ps;
 		std::pair<bool, bool>   readResult;
 	private:
 		void handleLast() {
@@ -1624,6 +1637,7 @@ public:
 			}
 		}
 
+		PatternSourceServiceFactory::LockedIdleQueueCV&   psq_idle_;
 		bool lastBatch_;
 	};
 
@@ -1667,19 +1681,16 @@ public:
 		psfact_(composer,pp),
 		n_readahead_(n_readahead),
 		psq_ready_(),
-		psq_idle_(),
-		readaheadt_(NULL),
 		listent_(acceptConnections, this) {}
 
 	~PatternSourceServiceFactory() {
 		// TODO: Signal listent_ it is time to quit
 		listent_.join();
+#if 0
+		// TODO: proper cleanup
 		ReadElement re(NULL); // this will signal readaheadt_ it is time to quit
 		returnUnready(re);
-		if (readaheadt_!=NULL) {
-			readaheadt_->join();
-			delete readaheadt_;
-		}
+#endif
 	}
 
 	// wait for data, if none in the queue
@@ -1688,13 +1699,7 @@ public:
 	}
 
 	void returnUnready(ReadElement& re) {
-		if (re.isLast()) {
-			// Nothing more to do with this one, cleanup
-			delete re.ps;
-			(*re.pst_counter)--;
-		} else {
-			psq_idle_.push(re);
-		}
+		re.returnUnready();
 	}
 
 private:
@@ -1817,35 +1822,6 @@ private:
 	// read header and pick the right response
         static void serveConnection(PatternSourceServiceFactory *obj, int client_fd);
 
-	// we still need the read-ahead logic, even though it is multiplexing over multiple connections
-        static void readAsync(PatternSourceServiceFactory *obj) {
-		LockedReadyQueueCV &psq_ready = obj->psq_ready_;
-		LockedIdleQueueCV  &psq_idle  = obj->psq_idle_;
-                while(true) {
-			ReadElement re(psq_idle.pop());
-			if (re.ps==NULL) break; // the destructor added this in the queue
-
-			if (re.ps->nextReadPairReady()) {
-				// Should never get in here, but just in case
-				re.readResult = make_pair(false, false);
-			} else {
-				re.nextReadPair();
-			}
-
-			if (re.isLast()) {
-			  bool success = re.readResult.first;
-			  if(!success) {
-				// Nothing more to do with this one, cleanup
-				delete re.ps;
-				(*re.pst_counter)--;
-				continue;
-			  }
-			  // else let it go through, so it can be processed
-			}
-			psq_ready.push(re);
-                }
-	}
-
 	// called by the main (listening) thread
 	inline void add_client(int client_fd) {
 		std::unique_lock<std::mutex> lk(m_); // must be locked since we are updating a shared resource (clients)
@@ -1891,7 +1867,6 @@ private:
 			// TODO: report error
 			return;
 		}
-		obj->readaheadt_ = new std::thread(readAsync,obj);
 		bool server_err = false;
                 while(!server_err) {
 			obj->maintain_clients(); // do some maintenance once in a while
@@ -1917,12 +1892,9 @@ private:
 	PatternSourcePerThreadFactory psfact_;
 	const unsigned int n_readahead_;
 	LockedReadyQueueCV psq_ready_;
-	LockedIdleQueueCV  psq_idle_;
 
 	std::map<int,std::thread *> clients_; 	// all active client threads
 	std::vector<std::thread *> finalizing_; // inactive threads that still need to joined
-
-	std::thread *readaheadt_; 		// main readahaed thread
 
 	// this must be last, as it gets the obj as parameter during construction
 	std::thread listent_; 			// main, listening thread

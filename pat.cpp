@@ -1928,32 +1928,51 @@ void PatternSourceServiceFactory::reply_config(int fd) {
 // We only paritally parsed the header
 // buf contains what we read from fd so far
 void PatternSourceServiceFactory::align(int fd) {
+	LockedReadyQueueCV &psq_ready = psq_ready_;   // the ready queue is shared, so the main loop can access it
+	LockedIdleQueueCV   psq_idle;  // the idle queue is private, so we have one listener x fd
+
 	AlnSink        *msink = msink_; // Quick hack, use global msink
 	EList<PatternSource*>* comp_params  = new EList<PatternSource*>();
 	auto *ps = new TabbedSocketPatternSource(pp_, fd, msink);
 	comp_params->push_back(ps);
 	SoloPatternComposer fd_composer(comp_params);
-	std::atomic<int> pst_counter(0);
+	int pst_counter = 0;;
 	// comp_params, ps and content now owned by fd_composer, and will be cleaned up by it
 
+	// we need enough buffers to feed all the processing threads
 	for (unsigned int i=0; i<n_readahead_; i++) {
-		ReadElement re(new PatternSourcePerThread(fd_composer, pp_), &pst_counter);
+		ReadElement re(new PatternSourcePerThread(fd_composer, pp_), psq_idle);
 		pst_counter++;
-		psq_idle_.push(re);
+		psq_idle.push(re);
 	}
-#if 0
-		fd_composer.wait_client_done(fd); // TODO
-		// TODO
-		char buf[1024];
-		int nels = read(fd,buf,1000);
-		buf[nels] = 0;
-		fprintf(stderr,"PatternSourceServiceFactory::Client> POST read(%s) %i\n",buf,fd);
-		if (write_str(fd,"align TBD\n")) {
-				fprintf(stderr,"PatternSourceServiceFactory::Client> POST reply2 %i\n",fd);
+
+	// now process one at a time until we have processed them all
+	while(pst_counter > 0) {
+		ReadElement re(psq_idle.pop());
+		if (re.ps==NULL) { // this is how we are told a buffer was done
+			pst_counter--;
+			continue;
 		}
-#endif
-	// wait for all the content to be processed
-	while (pst_counter.load() > 0) sleep(0.1); // we expect the processing to last a long time, so lazy polling is OK
+
+		if (re.ps->nextReadPairReady()) {
+			// Should never get in here, but just in case
+			re.readResult = make_pair(false, false);
+		} else {
+			re.nextReadPair();
+		}
+
+		if (re.isLast()) {
+		  bool success = re.readResult.first;
+		  if(!success) {
+			// Nothing more to do with this one, cleanup
+			delete re.ps;
+			pst_counter--;
+			continue;
+		  }
+		  // else let it go through, so it can be processed
+		}
+		psq_ready.push(re);
+	}
 }
 
 void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *obj, int client_fd) {
