@@ -25,12 +25,15 @@
 #include <unistd.h>
 #include <condition_variable>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <zlib.h>
 #include <cassert>
 #include <string>
 #include <ctype.h>
 #include <vector>
+#include <map>
 #include <queue>
+#include <atomic>
 #include "alphabet.h"
 #include "assert_helpers.h"
 #include "random_source.h"
@@ -67,6 +70,7 @@
 // full definition in aln_sink.h
 // but we only need the pointer here
 class AlnSink;
+class AlnSinkSam;
 
 /**
  * Classes and routines for reading reads from various input sources.
@@ -566,6 +570,94 @@ private:
 };
 
 /**
+ * Parent class for PatternSources that read from a file.
+ * Uses unlocked C I/O, on the assumption that all reading
+ * from a socket will take place in an otherwise-protected
+ * critical section.
+ */
+class SocketPatternSource : public PatternSource {
+public:
+	SocketPatternSource(
+		const PatternParams& p,
+		int fd,
+		long int max_bytes,
+                AlnSink* msink) :
+		PatternSource(p),
+		read_fd_(dup(fd)),
+		max_bytes_(max_bytes),
+		bytes_read(0),
+		msink_(msink),
+		fp_(NULL)
+		//zfp_(NULL),
+	{
+		// TODO: Consider support for compression
+		fp_ = fdopen(read_fd_, "rb");
+	}
+
+	/**
+	 * Close open file.
+	 */
+	virtual ~SocketPatternSource() {
+		if (fp_!=NULL) {
+			fclose(fp_);
+			fp_ = NULL;
+		}
+	}
+
+	/**
+	 * Fill Read with the sequence, quality and name for the next
+	 * read in the list of read files.	This function gets called by
+	 * all the search threads, so we must handle synchronization.
+	 *
+	 * Returns pair<bool, int> where bool indicates whether we're
+	 * completely done, and int indicates how many reads were read.
+	 */
+	virtual std::pair<bool, int> nextBatch(
+		PerThreadReadBuf& pt,
+		AlnSink* &msink,
+		bool batch_a,
+		bool lock = false);
+
+protected:
+
+	/**
+	 * Light-parse a batch of unpaired reads from current file into the given
+	 * buffer.	Called from CFilePatternSource.nextBatch().
+	 */
+	virtual std::pair<bool, int> nextBatchFromFile(
+		PerThreadReadBuf& pt,
+		bool batch_a,
+		unsigned read_idx) = 0;
+
+	int getc_wrapper() {
+		int c;
+
+		do {
+			if ((max_bytes_>=0) && (bytes_read>=max_bytes_)) return EOF; // already read everythign there was to read
+			c = getc_unlocked(fp_);
+			if (c!=EOF) bytes_read++;
+		} while (c != EOF && c != '\t' && c != '\r' && c != '\n' && !isprint(c));
+
+		return c;
+	}
+
+	const int read_fd_;		// socker fd
+	const long int max_bytes_;	// max number of bytes to read from read_fd
+	long int bytes_read;		// how many bytes did we read so far
+	AlnSink* msink_;		// Associated sink
+	FILE *fp_;			 // read file currently being read from
+	//gzFile zfp_;			 // compressed version of fp_
+	//CompressionType compressionType_;
+
+private:
+
+	pair<bool, int> nextBatchImpl(
+		PerThreadReadBuf& pt,
+		AlnSink* &msink,
+		bool batch_a);
+};
+
+/**
  * Synchronized concrete pattern source for a list of FASTA files.
  */
 class FastaPatternSource : public CFilePatternSource {
@@ -661,6 +753,38 @@ protected:
 		unsigned read_idx);
 
 	bool secondName_;	// true if --tab6, false if --tab5
+};
+
+/**
+ * Synchronized concrete pattern source for a list of files with tab-
+ * delimited name, seq, qual fields (or, for paired-end reads,
+ * basename, seq1, qual1, seq2, qual2).
+ */
+class TabbedSocketPatternSource : public SocketPatternSource {
+
+public:
+
+	TabbedSocketPatternSource(
+		const PatternParams& p,
+		int fd, 
+		long int max_bytes,
+                AlnSink* msink) :
+		SocketPatternSource(p, fd, max_bytes, msink) {}
+
+	/**
+	 * Finalize tabbed parsing outside critical section.
+	 */
+	virtual bool parse(Read& ra, Read& rb, TReadId rdid) const;
+
+protected:
+
+	/**
+	 * Light-parse a batch of tabbed-format reads into given buffer.
+	 */
+	virtual std::pair<bool, int> nextBatchFromFile(
+		PerThreadReadBuf& pt,
+		bool batch_a,
+		unsigned read_idx);
 };
 
 /**
@@ -1464,6 +1588,311 @@ private:
 	LockedREQueue psq_ready_;
 	LockedPSQueue psq_idle_;
 	std::thread asynct_;
+};
+
+class PatternSourceServiceFactory {
+private:
+	class LockedIdleQueueCV;
+public:
+	class ReadElement {
+	public:
+		// Nothing read yet
+		ReadElement(PatternSourcePerThread *ps_, PatternSourceServiceFactory::LockedIdleQueueCV&   psq_idle) :
+			ps(ps_),
+			readResult(make_pair(false, false)),
+			psq_idle_(psq_idle),
+			lastBatch_(false)	{}
+
+		// final, invalid one
+		ReadElement(PatternSourceServiceFactory::LockedIdleQueueCV&   psq_idle) :
+			ps(NULL),
+	       		psq_idle_(psq_idle)	{}
+
+		// we allow the object to be moved around
+		ReadElement(const ReadElement& other) = default;
+		ReadElement(ReadElement&& other) = default;
+
+		void nextReadPair() {
+			readResult = ps->nextReadPair();
+			handleLast();
+		}
+
+		// Service-internal last flag
+		bool isLast() const { return lastBatch_;}
+
+		void returnUnready() {
+			if (lastBatch_) {
+				// Nothing more to do with this one, cleanup
+				if(ps!=NULL) delete ps;
+				// inject NULL RE for proper handling in accept
+				ps = NULL;
+			}
+			psq_idle_.push(*this);
+		}
+
+		// not owned owned by the object, just pointer
+		// cleanup may still be needed on some actions
+		PatternSourcePerThread *ps;
+		std::pair<bool, bool>   readResult;
+	private:
+		void handleLast() {
+			bool lastBatch = readResult.second;
+			if(lastBatch) {
+				// Do not expose it to the main loop, it is internal info
+				readResult.second = false;
+				lastBatch_ = true;
+			}
+		}
+
+		PatternSourceServiceFactory::LockedIdleQueueCV&   psq_idle_;
+		bool lastBatch_;
+	};
+
+	// Simple wrapper for safely holding the result of PatternSourceServiceFactory
+	class ReadAhead {
+	public:
+		ReadAhead(PatternSourceServiceFactory& fact) :
+			fact_(fact),
+			re_(fact.nextReadPair()),
+			first_(true)	{}
+	
+		~ReadAhead() {
+			fact_.returnUnready(re_);
+		}
+
+		const std::pair<bool, bool>& nextReadResult() {
+			if (first_) {
+				// nextReadPair was already called in the psrah constructor
+				first_ = false;
+			} else {
+				re_.nextReadPair();
+			}
+			return re_.readResult;
+		}
+
+		PatternSourcePerThread* ptr() {return re_.ps;}
+	private:
+		PatternSourceServiceFactory& fact_;
+		PatternSourceServiceFactory::ReadElement re_;
+		bool first_;
+	};
+
+	PatternSourceServiceFactory(
+		PatternComposer& composer,
+		const PatternParams& pp, size_t n_readahead,
+		AlnSinkSam &msink):
+		server_port_(3333),
+		server_backlog(128),
+		pp_(pp),
+		template_msink_(msink),
+		psfact_(composer,pp),
+		n_readahead_(n_readahead),
+		psq_ready_(),
+		listent_(acceptConnections, this) {}
+
+	~PatternSourceServiceFactory() {
+		// TODO: Signal listent_ it is time to quit
+		listent_.join();
+#if 0
+		// TODO: proper cleanup
+		ReadElement re(NULL); // this will signal readaheadt_ it is time to quit
+		returnUnready(re);
+#endif
+	}
+
+	// wait for data, if none in the queue
+	ReadElement nextReadPair() {
+		return psq_ready_.pop();
+	}
+
+	void returnUnready(ReadElement& re) {
+		re.returnUnready();
+	}
+
+private:
+
+	template <typename T>
+	class LockedQueueCV {
+	public:
+		virtual ~LockedQueueCV() {}
+
+		bool empty() {
+			bool ret = false;
+			{
+				std::unique_lock<std::mutex> lk(m_);
+				ret = q_.empty();
+			}
+			return ret;
+		}
+
+		void push(T& ps) {
+			std::unique_lock<std::mutex> lk(m_);
+			q_.push(ps);
+			cv_.notify_all();
+		}
+
+		// wait for data, if none in the queue
+		T pop() {
+			std::unique_lock<std::mutex> lk(m_);
+			cv_.wait(lk, [this] { return !q_.empty();});
+			T ret(q_.front());
+			q_.pop();
+			return ret;
+		}
+
+	protected:
+		std::mutex m_;
+		std::condition_variable cv_;
+		std::queue<T> q_;
+	};
+
+	class LockedIdleQueueCV : public LockedQueueCV<ReadElement> {
+	public:
+		virtual ~LockedIdleQueueCV() {
+			while (!q_.empty()) {
+				delete q_.front().ps;
+				q_.pop();
+			}
+		}
+	};
+
+	class LockedReadyQueueCV : public LockedQueueCV<ReadElement> {
+	public:
+		virtual ~LockedReadyQueueCV() {
+			// we actually own ps while in the queue
+			while (!q_.empty()) {
+				delete q_.front().ps;
+				q_.pop();
+			}
+		}
+	};
+
+	// write a string with retries, but silently abort on error
+	static void try_write_str(int fd, const char *str) {
+		int len = strlen(str);
+		do {
+			int written = ::write(fd,str,len);
+			if (written<1) {
+				// try once more only
+				written = ::write(fd,str,len);
+			}
+
+			if (written>0) {
+				// get ready for next chunk, if needed
+				len-= written;
+				str+=written;
+			} else {
+				break; // just abort
+			}
+		} while(len>0);
+	}
+
+	// write a string with retries, report any errors
+	// returns false in case of error
+	static bool write_str(int fd, const char *str) {
+		int len = strlen(str);
+		do {
+			int written = ::write(fd,str,len);
+			if (written<1) {
+				// try once more only
+				written = ::write(fd,str,len);
+			}
+
+			if (written>0) {
+				// get ready for next chunk, if needed
+				len-= written;
+				str+=written;
+			} else {
+				return false;
+			}
+		} while(len>0);
+		return true;
+	}
+
+	// read until \n\n detected, discard content
+	// can go over \n\n
+        static void finish_header_read(int fd, char *init_buf, int init_len);
+
+	// read until \n\n detected
+	// can NOT go over \n\n
+	// return true if we read right up to t\n\n
+        static bool read_header(int fd, char *buf, int& buf_len);
+
+	// extract content length from the header string
+	// return -1 if cannot find it
+	static long int find_content_length(const char str[]);
+
+	// just return the config
+	void reply_config(int fd);
+
+	// this is the real alignment happens
+	// We only paritally parsed the header
+	// buf contains what we read from fd so far
+	void align(int fd, long int data_size);
+
+	// read header and pick the right response
+        static void serveConnection(PatternSourceServiceFactory *obj, int client_fd);
+
+	// called by the main (listening) thread
+	inline void add_client(int client_fd) {
+		std::unique_lock<std::mutex> lk(m_); // must be locked since we are updating a shared resource (clients)
+		std::thread *client_t = new std::thread(serveConnection,this, client_fd);
+		clients_[client_fd] = client_t;
+	}
+
+	// should be called by the main thread
+	inline void maintain_clients() {
+		std::unique_lock<std::mutex> lk(m_); // must be locked since we are updating a shared resource (finalizing)
+		for (std::thread* &client_t : finalizing_) {
+			client_t->join();
+			delete client_t;
+			client_t = NULL;
+		}
+		finalizing_.clear();
+	}
+
+	// should be called by the main thread
+	inline void final_wait_clients() {
+		while (!clients_.empty()) sleep(1); // we need to wait for all the clients to finish, but no need to be efficient in waiting
+		maintain_clients(); // final cleanup
+	}
+
+	// called by each client thread
+	void finalize_client(int client_fd) {
+		std::unique_lock<std::mutex> lk(m_); // must be locked since we are updating a shared resource (clients,finalizing)
+		auto client_itr = clients_.find(client_fd);
+		if (client_itr!=clients_.end()) { // we should always get in here, but just in case
+			std::thread *client_t = client_itr->second;
+			clients_.erase(client_itr);
+			finalizing_.push_back(client_t);
+		}
+		// close after erase, so it does not get resued by the system
+		close_socket(client_fd);
+		//fprintf(stderr,"PatternSourceServiceFactory::Client> Closed connection %i\n",client_fd);
+	}
+
+	static constexpr int MAX_HEADER_SIZE = 1023;
+
+        static int start_listening(int port, int backlog);
+	static void close_socket(int fd);
+
+        static void acceptConnections(PatternSourceServiceFactory *obj);
+
+	const int server_port_;
+	const int server_backlog;
+	const PatternParams& pp_;
+	AlnSinkSam& template_msink_;
+
+	std::mutex m_;
+	PatternSourcePerThreadFactory psfact_;
+	const unsigned int n_readahead_;
+	LockedReadyQueueCV psq_ready_;
+
+	std::map<int,std::thread *> clients_; 	// all active client threads
+	std::vector<std::thread *> finalizing_; // inactive threads that still need to joined
+
+	// this must be last, as it gets the obj as parameter during construction
+	std::thread listent_; 			// main, listening thread
 };
 
 #ifdef USE_SRA

@@ -132,6 +132,8 @@ public:
 	 */
 	void flush(bool force = false, bool getLock = true);
 
+
+	size_t numThreads() const {return nthreads_;}
 protected:
 
 	OutFileBuf&     obuf_;
