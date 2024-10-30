@@ -1984,6 +1984,16 @@ long int PatternSourceServiceFactory::find_content_length(const char str[]) {
 	return out;
 }
 
+bool PatternSourceServiceFactory::find_request_terminator(const char str[]) {
+	int ibool = 0;
+	const char *cl_str = strstr(str,"\nX-BT2SRV-Request-Terminator: ");
+	if (cl_str!=NULL) {
+		int cnt = sscanf(cl_str+30, "%i ", &ibool);
+		if (cnt!=1) ibool = 0;
+	}
+	return ibool>0; // may get more fancy in the future, but !=0 good enough for now
+}
+
 // just return the config
 void PatternSourceServiceFactory::reply_config(int fd) {
 	// TODO
@@ -1993,7 +2003,7 @@ void PatternSourceServiceFactory::reply_config(int fd) {
 // this is the real alignment happens
 // We only paritally parsed the header
 // buf contains what we read from fd so far
-void PatternSourceServiceFactory::align(int fd, long int data_size) {
+bool PatternSourceServiceFactory::align(int fd, long int data_size) {
    {
 	LockedReadyQueueCV &psq_ready = psq_ready_;   // the ready queue is shared, so the main loop can access it
 	LockedIdleQueueCV   psq_idle;  // the idle queue is private, so we have one listener x fd
@@ -2060,6 +2070,8 @@ void PatternSourceServiceFactory::align(int fd, long int data_size) {
 	oq.flush(true);
    }
    fsync(fd);
+
+   return true; // no errors, we completed just fine
 }
 
 void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *obj, int client_fd) {
@@ -2090,12 +2102,23 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 			// read the remaining header, so client_fd it is ready for the payload
 			if (read_header(client_fd, buf, nels)) {
 				buf[nels] = '\0'; // null terminate, so now it is actually a string
+				bool term = find_request_terminator(buf);
 				long int data_size = find_content_length(buf);
 				// TODO: negative number OK, means 2xnewline terminated
 				// fprintf(stderr,"PatternSourceServiceFactory::Client> align on %i\n",client_fd);
-				if (write_str(client_fd,"HTTP/1.0 200 OK\n\n")) {
+				char hwbuf[128];
+				if (term) {
+					sprintf(hwbuf,"HTTP/1.0 200 OK\nX-BT2SRV-Terminator: 1\n\n");
+				} else {
+					sprintf(hwbuf,"HTTP/1.0 200 OK\n\n");
+				}
+				bool noerr = write_str(client_fd,hwbuf);
+				if (noerr) {
 					// the align method will keep reading the input
-					obj->align(client_fd, data_size);
+					noerr = obj->align(client_fd, data_size);
+				}
+				if (noerr && term) {
+					noerr = write_str(client_fd,"@CO BT2SRV All Done\n");
 				}
 				// fprintf(stderr,"PatternSourceServiceFactory::Client> end align on %i\n",client_fd);
 				// if initial write failed, just abort

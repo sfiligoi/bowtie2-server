@@ -1822,13 +1822,18 @@ private:
 	// return -1 if cannot find it
 	static long int find_content_length(const char str[]);
 
+	// look for the terminator request
+	// returns true if it finds one
+	static bool find_request_terminator(const char str[]);
+
 	// just return the config
 	void reply_config(int fd);
 
 	// this is the real alignment happens
 	// We only paritally parsed the header
 	// buf contains what we read from fd so far
-	void align(int fd, long int data_size);
+	// returns false in case of error
+	bool align(int fd, long int data_size);
 
 	// read header and pick the right response
         static void serveConnection(PatternSourceServiceFactory *obj, int client_fd);
