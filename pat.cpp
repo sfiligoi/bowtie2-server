@@ -1863,8 +1863,9 @@ void PatternSourceServiceFactory::acceptConnections(PatternSourceServiceFactory 
 		// TODO: report error
 		return;
 	}
+	fprintf(stderr,"INFO: Server listening\n");
 	bool server_err = false;
-               while(!server_err) {
+	while(!server_err) {
 		obj->maintain_clients(); // do some maintenance once in a while
 		struct sockaddr_in client_addr;
 		socklen_t client_addr_len = sizeof(client_addr);
@@ -1875,9 +1876,11 @@ void PatternSourceServiceFactory::acceptConnections(PatternSourceServiceFactory 
 		}
 		//fprintf(stderr,"PatternSourceServiceFactory> New connection\n");
 		obj->add_client(client_fd);
-               }
+	}
+	fprintf(stderr,"INFO: Server shutting down\n");
 	obj->final_wait_clients();
 	close(server_fd);
+	fprintf(stderr,"INFO: Server stopped\n");
 }
 
 // read until \n\n detected, discard content
@@ -1920,45 +1923,65 @@ void PatternSourceServiceFactory::finish_header_read(int fd, char *init_buf, int
 // read until \n\n detected
 // can NOT go over \n\n
 // return true if we read right up to t\n\n
-bool PatternSourceServiceFactory::read_header(int fd, char *init_buf, int init_len) {
+bool PatternSourceServiceFactory::read_header(int fd, char *buf, int& buf_len) {
 	int n_nl = 0; // nr of consecutive \n
-	for (int i=0; i<init_len; i++) {
-		if (init_buf[i]=='\r') {
+	int len = buf_len;
+	for (int i=0; i<len; i++) {
+		const char c = buf[i];
+		if (c=='\r') {
 			// ignore... likely \r\n
-		} else if (init_buf[i]=='\n') {
+		} else if (c=='\n') {
 			n_nl++; // here is one
 		} else {
 			n_nl = 0; // nope, start counting from the beginning
 		}
 		if (n_nl==2) {
 			// found them all
-			return ((i+1)==init_len); // only a success if the last char in the buf, else we have a problem
+			return ((i+1)==len); // only a success if the last char in the buf, else we have a problem
 		}
 	}
 	// not found in initial buf, keep reading
-	char buf[4]; // Must go in small steps to avoid going over \n\n
-	while (true) {
+	while (len<(MAX_HEADER_SIZE-2)) {
+		// Must go in small steps to avoid going over \n\n
 		const int max_buf_read = (n_nl==0) ? 2 : 1; // we can read 2 at a time only if we still need both \n's
-		int nels = ::read(fd, buf, max_buf_read);
+		int nels = ::read(fd, buf+len, max_buf_read);
 		if (nels<1) {
 			// try once more only
 			nels = ::read(fd, buf, max_buf_read);
 		}
 		if (nels<1) return false; // EOF or unrecoverable error
 		for (int i=0; i<nels; i++) {
-			if (buf[i]=='\r') {
+			const char c = buf[len];
+			len++;
+			if (c=='\r') {
 				// ignore... likely \r\n
-			} else if (buf[i]=='\n') {
+			} else if (c=='\n') {
 				n_nl++; // here is one
 			} else {
 				n_nl = 0; // nope, start counting from the beginning
 			}
-			if (n_nl==2) return true; // found them all
+			if (n_nl==2) {
+				// found the all
+				buf_len = len;
+				return true; ((i+1)==nels); // only a success if the last char in the buf, else we have a problem
+			}
 		}
 		// else, keep reading
+		//buf[len]='\0'; fprintf(stderr,"%s\n",buf);
 	}
-	// should never get here, but just in case
+	// fprintf(stderr, "WARN: Header too long\n");
+	buf_len = len;
 	return false;
+}
+
+long int PatternSourceServiceFactory::find_content_length(const char str[]) {
+	long int out = -1;
+	const char *cl_str = strstr(str,"\nContent-Length: ");
+	if (cl_str!=NULL) {
+		int cnt = sscanf(cl_str+17, "%li ", &out);
+		if (cnt!=1) out = -1; // -1 means we did not get the value
+	}
+	return out;
 }
 
 // just return the config
@@ -1970,10 +1993,12 @@ void PatternSourceServiceFactory::reply_config(int fd) {
 // this is the real alignment happens
 // We only paritally parsed the header
 // buf contains what we read from fd so far
-void PatternSourceServiceFactory::align(int fd) {
+void PatternSourceServiceFactory::align(int fd, long int data_size) {
    {
 	LockedReadyQueueCV &psq_ready = psq_ready_;   // the ready queue is shared, so the main loop can access it
 	LockedIdleQueueCV   psq_idle;  // the idle queue is private, so we have one listener x fd
+
+        //fprintf(stderr, "align Length %li\n",data_size);
 
 	const int readsPerBatch = 16; // TODO: Should it be dynamic?
 	const bool reorder = false;   // TODO: Get it from the header
@@ -1990,7 +2015,7 @@ void PatternSourceServiceFactory::align(int fd) {
 	AlnSinkSam msink(template_msink_, oq);
 
 	EList<PatternSource*>* comp_params  = new EList<PatternSource*>();
-	auto *ps = new TabbedSocketPatternSource(pp_, fd, &msink);
+	auto *ps = new TabbedSocketPatternSource(pp_, fd, data_size, &msink);
 	comp_params->push_back(ps);
 	SoloPatternComposer fd_composer(comp_params);
 	int pst_counter = 0;;
@@ -2039,7 +2064,8 @@ void PatternSourceServiceFactory::align(int fd) {
 
 void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *obj, int client_fd) {
 	{
-		char buf[24]; // we just need the header at this point
+		char buf[MAX_HEADER_SIZE+1]; // +1, so we can null terminate
+		// we just need the header at this point
 		int nels = ::read(client_fd, buf, 20); // do not read past the align header end
 		if ((nels>=10)&&(memcmp(buf,"GET / HTTP",10)==0)) {
 			finish_header_read(client_fd, buf, nels);
@@ -2058,28 +2084,36 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 			try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
 			// empty input buffer, so the client is not surprised
 			finish_header_read(client_fd, buf, nels);
-		} else if ((nels>=16)&&(memcmp(buf,"POST /align HTTP",16)==0)) {
+		} else if ( ((nels>=16)&&(memcmp(buf,"POST /align HTTP",16)==0)) ||
+			    ((nels>=15)&&(memcmp(buf,"PUT /align HTTP",15)==0)) ) {
 			// request for alignment
 			// read the remaining header, so client_fd it is ready for the payload
 			if (read_header(client_fd, buf, nels)) {
-				//fprintf(stderr,"PatternSourceServiceFactory::Client> POST on %i\n",client_fd);
+				buf[nels] = '\0'; // null terminate, so now it is actually a string
+				long int data_size = find_content_length(buf);
+				// TODO: negative number OK, means 2xnewline terminated
+				// fprintf(stderr,"PatternSourceServiceFactory::Client> align on %i\n",client_fd);
 				if (write_str(client_fd,"HTTP/1.0 200 OK\n\n")) {
 					// the align method will keep reading the input
-					obj->align(client_fd);
+					obj->align(client_fd, data_size);
 				}
+				// fprintf(stderr,"PatternSourceServiceFactory::Client> end align on %i\n",client_fd);
 				// if initial write failed, just abort
 			} else {
 				// something went wrong in parsing the header, try to notify sender
 				try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
 			}
-		} else if ((nels>=5)&&(memcmp(buf,"POST ",5)==0)) {
-			// any other post is invalid
+		} else if ( ((nels>=5)&&(memcmp(buf,"POST ",5)==0)) ||
+			    ((nels>=4)&&(memcmp(buf,"PUT ",4)==0))  ){
+			// any other post or put is invalid
 			//buf[nels] = 0;
-			//fprintf(stderr, "===%s===\n", buf);
+			//fprintf(stderr, "NFO: Received unsupported PUT/POST: '%s'\n", buf);
 			try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
 			// empty input buffer, so the client is not surprised
 			finish_header_read(client_fd, buf, nels);
 		} else {
+			//buf[nels] = '\0';
+			//fprintf(stderr, "INFO: Received unsupported method: '%s'\n",buf);
 			// refuse any other request
 			try_write_str(client_fd,"HTTP/1.0 405 Method Not Allowed\nAllow: GET, POST\n\n");
 			// just drop connecton, we do not know if it is even a valid header

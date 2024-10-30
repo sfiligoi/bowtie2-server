@@ -580,9 +580,12 @@ public:
 	SocketPatternSource(
 		const PatternParams& p,
 		int fd,
+		long int max_bytes,
                 AlnSink* msink) :
 		PatternSource(p),
 		read_fd_(dup(fd)),
+		max_bytes_(max_bytes),
+		bytes_read(0),
 		msink_(msink),
 		fp_(NULL)
 		//zfp_(NULL),
@@ -630,13 +633,17 @@ protected:
 		int c;
 
 		do {
+			if ((max_bytes_>=0) && (bytes_read>=max_bytes_)) return EOF; // already read everythign there was to read
 			c = getc_unlocked(fp_);
+			if (c!=EOF) bytes_read++;
 		} while (c != EOF && c != '\t' && c != '\r' && c != '\n' && !isprint(c));
 
 		return c;
 	}
 
-	int read_fd_;			// socker fd
+	const int read_fd_;		// socker fd
+	const long int max_bytes_;	// max number of bytes to read from read_fd
+	long int bytes_read;		// how many bytes did we read so far
 	AlnSink* msink_;		// Associated sink
 	FILE *fp_;			 // read file currently being read from
 	//gzFile zfp_;			 // compressed version of fp_
@@ -760,8 +767,9 @@ public:
 	TabbedSocketPatternSource(
 		const PatternParams& p,
 		int fd, 
+		long int max_bytes,
                 AlnSink* msink) :
-		SocketPatternSource(p, fd, msink) {}
+		SocketPatternSource(p, fd, max_bytes, msink) {}
 
 	/**
 	 * Finalize tabbed parsing outside critical section.
@@ -1808,7 +1816,11 @@ private:
 	// read until \n\n detected
 	// can NOT go over \n\n
 	// return true if we read right up to t\n\n
-        static bool read_header(int fd, char *init_buf, int init_len);
+        static bool read_header(int fd, char *buf, int& buf_len);
+
+	// extract content length from the header string
+	// return -1 if cannot find it
+	static long int find_content_length(const char str[]);
 
 	// just return the config
 	void reply_config(int fd);
@@ -1816,7 +1828,7 @@ private:
 	// this is the real alignment happens
 	// We only paritally parsed the header
 	// buf contains what we read from fd so far
-	void align(int fd);
+	void align(int fd, long int data_size);
 
 	// read header and pick the right response
         static void serveConnection(PatternSourceServiceFactory *obj, int client_fd);
@@ -1858,6 +1870,8 @@ private:
 		close_socket(client_fd);
 		//fprintf(stderr,"PatternSourceServiceFactory::Client> Closed connection %i\n",client_fd);
 	}
+
+	static constexpr int MAX_HEADER_SIZE = 1023;
 
         static int start_listening(int port, int backlog);
 	static void close_socket(int fd);
