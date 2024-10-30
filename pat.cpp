@@ -1963,7 +1963,7 @@ bool PatternSourceServiceFactory::read_header(int fd, char *buf, int& buf_len) {
 			if (n_nl==2) {
 				// found the all
 				buf_len = len;
-				return true; ((i+1)==nels); // only a success if the last char in the buf, else we have a problem
+				return ((i+1)==nels); // only a success if the last char in the buf, else we have a problem
 			}
 		}
 		// else, keep reading
