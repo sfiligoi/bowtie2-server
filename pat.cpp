@@ -1724,7 +1724,14 @@ pair<bool, int> TabbedSocketPatternSource::nextBatchFromFile(
  * Finalize tabbed parsing outside critical section.
  */
 bool TabbedSocketPatternSource::parse(Read& ra, Read& rb, TReadId rdid) const {
-	return tabbed_parse(ra, rb, true, pp_);
+	bool success = false;
+	try {
+		success = tabbed_parse(ra, rb, true, pp_);
+	} catch (...) {
+		fprintf(stderr, "WARN: Error in parsing input\n");
+		success = false;
+	}
+	return success;
 }
 
 /**
