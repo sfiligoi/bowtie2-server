@@ -238,20 +238,20 @@ RELEASE_DEFS   = -DCOMPILER_OPTIONS="\"$(RELEASE_FLAGS) $(CXXFLAGS)\""
 
 BOWTIE2_BIN_LIST := bowtie2-build-s \
   bowtie2-build-l \
-  bowtie2-align-s \
-  bowtie2-align-l \
+  bowtie2-align-server-s \
+  bowtie2-align-server-l \
   bowtie2-inspect-s \
   bowtie2-inspect-l
 BOWTIE2_BIN_LIST_DBG := bowtie2-build-s-debug \
   bowtie2-build-l-debug \
-  bowtie2-align-s-debug \
-  bowtie2-align-l-debug \
+  bowtie2-align-server-s-debug \
+  bowtie2-align-server-l-debug \
   bowtie2-inspect-s-debug \
   bowtie2-inspect-l-debug
 BOWTIE2_BIN_LIST_SAN := bowtie2-build-s-sanitized \
   bowtie2-build-l-sanitized \
-  bowtie2-align-s-sanitized \
-  bowtie2-align-l-sanitized \
+  bowtie2-align-server-s-sanitized \
+  bowtie2-align-server-l-sanitized \
   bowtie2-inspect-s-sanitized \
   bowtie2-inspect-l-sanitized
 ifndef SANITIZER_FLAGS
@@ -309,9 +309,9 @@ endif
 
 all: $(BOWTIE2_BIN_LIST) ;
 allall: $(BOWTIE2_BIN_LIST) $(BOWTIE2_BIN_LIST_DBG) $(BOWTIE2_BIN_LIST_SAN) ;
-both: bowtie2-align-s bowtie2-build-s bowtie2-align-l bowtie2-build-l ;
-both-debug: bowtie2-align-s-debug bowtie2-build-s-debug bowtie2-align-l-debug bowtie2-build-l-debug ;
-both-sanitized: bowtie2-align-s-sanitized bowtie2-build-s-sanitized bowtie2-align-l-sanitized bowtie2-build-l-sanitized ;
+both: bowtie2-align-server-s bowtie2-build-s bowtie2-align-server-l bowtie2-build-l ;
+both-debug: bowtie2-align-server-s-debug bowtie2-build-s-debug bowtie2-align-server-l-debug bowtie2-build-l-debug ;
+both-sanitized: bowtie2-align-server-s-sanitized bowtie2-build-s-sanitized bowtie2-align-server-l-sanitized bowtie2-build-l-sanitized ;
 
 DEFS := -fno-strict-aliasing \
   -DBOWTIE2_VERSION="\"`cat BOWTIE2_VERSION`\"" \
@@ -334,7 +334,7 @@ bowtie2-build-%: CXXFLAGS += $(BUILD_CXXFLAGS)
 bowtie2-build-%: LDFLAGS += $(BUILD_LDFLAGS)
 bowtie2-build-%: LDLIBS += $(BUILD_LDLIBS)
 
-bowtie2-align-%: LDLIBS += $(ALIGN_LDLIBS)
+bowtie2-align-server-%: LDLIBS += $(ALIGN_LDLIBS)
 #
 # bowtie2-build targets
 #
@@ -371,10 +371,10 @@ bowtie2-build-l-debug: bt2_build.cpp $(SHARED_CPPS) $(HEADERS)
 		$(LDFLAGS) $(LDLIBS)
 
 #
-# bowtie2-align targets
+# bowtie2-align-server targets
 #
 
-bowtie2-align-s-sanitized bowtie2-align-s: bt2_search.cpp $(SEARCH_CPPS) $(SHARED_CPPS) $(HEADERS) $(SEARCH_FRAGMENTS)
+bowtie2-align-server-s-sanitized bowtie2-align-server-s: bt2_search.cpp $(SEARCH_CPPS) $(SHARED_CPPS) $(HEADERS) $(SEARCH_FRAGMENTS)
 	$(CXX) $(RELEASE_FLAGS) $(RELEASE_DEFS) $(CXXFLAGS) \
 		$(DEFS) -DBOWTIE2 $(NOASSERT_FLAGS) \
 		$(CPPFLAGS) \
@@ -382,7 +382,7 @@ bowtie2-align-s-sanitized bowtie2-align-s: bt2_search.cpp $(SEARCH_CPPS) $(SHARE
 		$(SHARED_CPPS) $(SEARCH_CPPS_MAIN) \
 		$(LDFLAGS) $(LDLIBS)
 
-bowtie2-align-l-sanitized bowtie2-align-l: bt2_search.cpp $(SEARCH_CPPS) $(SHARED_CPPS) $(HEADERS) $(SEARCH_FRAGMENTS)
+bowtie2-align-server-l-sanitized bowtie2-align-server-l: bt2_search.cpp $(SEARCH_CPPS) $(SHARED_CPPS) $(HEADERS) $(SEARCH_FRAGMENTS)
 	$(CXX) $(RELEASE_FLAGS) $(RELEASE_DEFS) $(CXXFLAGS) \
 		$(DEFS) -DBOWTIE2 -DBOWTIE_64BIT_INDEX $(NOASSERT_FLAGS)  \
 		$(CPPFLAGS) \
@@ -390,7 +390,7 @@ bowtie2-align-l-sanitized bowtie2-align-l: bt2_search.cpp $(SEARCH_CPPS) $(SHARE
 		$(SHARED_CPPS) $(SEARCH_CPPS_MAIN) \
 		$(LDFLAGS) $(LDLIBS)
 
-bowtie2-align-s-debug: bt2_search.cpp $(SEARCH_CPPS) $(SHARED_CPPS) $(HEADERS) $(SEARCH_FRAGMENTS)
+bowtie2-align-server-s-debug: bt2_search.cpp $(SEARCH_CPPS) $(SHARED_CPPS) $(HEADERS) $(SEARCH_FRAGMENTS)
 	$(CXX) $(DEBUG_FLAGS) \
 		$(DEBUG_DEFS) $(CXXFLAGS) \
 		$(DEFS) -DBOWTIE2  \
@@ -399,7 +399,7 @@ bowtie2-align-s-debug: bt2_search.cpp $(SEARCH_CPPS) $(SHARED_CPPS) $(HEADERS) $
 		$(SHARED_CPPS) $(SEARCH_CPPS_MAIN) \
 		$(LDFLAGS) $(LDLIBS)
 
-bowtie2-align-l-debug: bt2_search.cpp $(SEARCH_CPPS) $(SHARED_CPPS) $(HEADERS) $(SEARCH_FRAGMENTS)
+bowtie2-align-server-l-debug: bt2_search.cpp $(SEARCH_CPPS) $(SHARED_CPPS) $(HEADERS) $(SEARCH_FRAGMENTS)
 	$(CXX) $(DEBUG_FLAGS) \
 		$(DEBUG_DEFS) $(CXXFLAGS) \
 		$(DEFS) -DBOWTIE2 -DBOWTIE_64BIT_INDEX  \
@@ -500,7 +500,7 @@ bowtie2-bin-pkg: $(BIN_PKG_LIST) $(BOWTIE2_BIN_LIST) $(BOWTIE2_BIN_LIST_DBG)
 	chmod a+x scripts/*.sh scripts/*.pl
 	rm -rf .bin.tmp
 	mkdir -p .bin.tmp/$(PKG_DIR)
-	if [ -f bowtie2-align-s.exe ] ; then \
+	if [ -f bowtie2-align-server-s.exe ] ; then \
 		zip tmp.zip $(BIN_PKG_LIST) $(addsuffix .exe,$(BOWTIE2_BIN_LIST) $(BOWTIE2_BIN_LIST_DBG)) ; \
 	else \
 		zip tmp.zip $(BIN_PKG_LIST) $(BOWTIE2_BIN_LIST) $(BOWTIE2_BIN_LIST_DBG) ; \
