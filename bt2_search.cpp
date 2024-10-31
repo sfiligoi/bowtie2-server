@@ -26,6 +26,7 @@
 #include <math.h>
 #include <stdexcept>
 #include <stdlib.h>
+#include <libgen.h>
 #include <string>
 #include <thread>
 #include <time.h>
@@ -4691,6 +4692,7 @@ static void multiseedSearch(
 	AlnSinkSam& msink,               // hit sink
 	Ebwt& ebwtFw,                 // index of original text
 	Ebwt* ebwtBw,                 // index of mirror text
+	const char ebwt_basename[],   // logical index name
 	OutFileBuf *metricsOfb)
 {
 	multiseed_msink  = &msink;
@@ -4729,7 +4731,7 @@ static void multiseedSearch(
 #if 0
 	PatternSourceReadAheadFactory readahead_factory(patsrc,pp,4*nthreads+1);
 #else
-	PatternSourceServiceFactory readahead_factory(patsrc,pp,4*nthreads+1, msink);
+	PatternSourceServiceFactory readahead_factory(patsrc,pp,4*nthreads+1, msink, ebwt_basename);
 #endif
 	multiseed_readahead_factory = &readahead_factory;
 
@@ -5055,6 +5057,13 @@ static void driver(
 		if(!metricsFile.empty() && metricsIval > 0) {
 			metricsOfb = new OutFileBuf(metricsFile);
 		}
+
+		//Note: basename may modify the input buffer, so make a copy
+		char adjIdxBaseBuf[1024];
+		strncpy(adjIdxBaseBuf,adjIdxBase.c_str(),1023);
+		adjIdxBaseBuf[1023] = '\0';
+		char *ebwt_basename = basename(adjIdxBaseBuf);
+
 		// Do the search for all input reads
 		assert(patsrc != NULL);
 		assert(mssink != NULL);
@@ -5090,6 +5099,7 @@ static void driver(
 				*mssink, // hit sink
 				ebwt,    // BWT
 				&ebwtBw, // BWT'
+				ebwt_basename, // logical BWT name
 				metricsOfb);
                 } else {
 			multiseedSearch(
@@ -5099,6 +5109,7 @@ static void driver(
 				*mssink, // hit sink
 				ebwt,    // BWT
 				NULL,    // BWT'
+				ebwt_basename, // logical BWT name
 				metricsOfb);
 		}
 

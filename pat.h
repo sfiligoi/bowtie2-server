@@ -1680,9 +1680,11 @@ public:
 	PatternSourceServiceFactory(
 		PatternComposer& composer,
 		const PatternParams& pp, size_t n_readahead,
-		AlnSinkSam &msink):
+		AlnSinkSam &msink,
+		const char *index_name):
 		server_port_(3333),
-		server_backlog(128),
+		server_backlog_(128),
+		index_name_(index_name),
 		pp_(pp),
 		template_msink_(msink),
 		psfact_(composer,pp),
@@ -1884,7 +1886,8 @@ private:
         static void acceptConnections(PatternSourceServiceFactory *obj);
 
 	const int server_port_;
-	const int server_backlog;
+	const int server_backlog_;
+	const char * const index_name_;
 	const PatternParams& pp_;
 	AlnSinkSam& template_msink_;
 

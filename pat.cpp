@@ -1865,7 +1865,7 @@ void PatternSourceServiceFactory::close_socket(int fd) {
 }
 
 void PatternSourceServiceFactory::acceptConnections(PatternSourceServiceFactory *obj) {
-	const int server_fd = start_listening(obj->server_port_, obj->server_backlog);
+	const int server_fd = start_listening(obj->server_port_, obj->server_backlog_);
 	if (server_fd==-1) {
 		// TODO: report error
 		return;
@@ -2004,7 +2004,11 @@ bool PatternSourceServiceFactory::find_request_terminator(const char str[]) {
 // just return the config
 void PatternSourceServiceFactory::reply_config(int fd) {
 	// TODO
-	try_write_str(fd,"config TBD\n");
+	char buf[2048]; // we guarantee that none of the fields will be larger
+	sprintf(buf,"BT2SRV-Version: %s\n",BOWTIE2_VERSION);
+	try_write_str(fd,buf);
+	sprintf(buf,"Index-Name: %s\n",this->index_name_);
+	try_write_str(fd,buf);
 }
 
 // this is the real alignment happens
