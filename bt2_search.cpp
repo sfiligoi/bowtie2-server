@@ -4731,7 +4731,13 @@ static void multiseedSearch(
 #if 0
 	PatternSourceReadAheadFactory readahead_factory(patsrc,pp,4*nthreads+1);
 #else
-	PatternSourceServiceFactory readahead_factory(patsrc,pp,4*nthreads+1, msink, ebwt_basename);
+	PatternSourceServiceFactory::Config readahead_factory_config(ebwt_basename);
+	readahead_factory_config.seedLen = multiseedLen;
+	readahead_factory_config.seedRounds = nSeedRounds;
+	readahead_factory_config.maxDpStreak = maxDpStreak;
+	readahead_factory_config.khits = allHits ? -1 : khits;
+
+	PatternSourceServiceFactory readahead_factory(patsrc,pp,4*nthreads+1, msink, readahead_factory_config);
 #endif
 	multiseed_readahead_factory = &readahead_factory;
 

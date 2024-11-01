@@ -1677,14 +1677,30 @@ public:
 		bool first_;
 	};
 
+	class Config {
+	public:
+		Config(const char *iname) : 
+			index_name(iname),
+			seedLen(0),
+			maxDpStreak(0),
+			seedRounds(0),
+			khits(-1) {}
+
+		const char *index_name;
+		int seedLen;
+		int maxDpStreak;
+		int seedRounds;
+		int khits; // set to -1 if allHits==true
+	};
+
 	PatternSourceServiceFactory(
 		PatternComposer& composer,
 		const PatternParams& pp, size_t n_readahead,
 		AlnSinkSam &msink,
-		const char *index_name):
+		const Config& config):
 		server_port_(3333),
 		server_backlog_(128),
-		index_name_(index_name),
+		config_(config),
 		pp_(pp),
 		template_msink_(msink),
 		psfact_(composer,pp),
@@ -1829,7 +1845,8 @@ private:
 	static bool find_request_terminator(const char str[]);
 
 	// just return the config
-	void reply_config(int fd);
+	// if is_header==true, prepend with X-BT2SRV-
+	bool reply_config(int fd, bool is_header);
 
 	// this is the real alignment happens
 	// We only paritally parsed the header
@@ -1887,7 +1904,7 @@ private:
 
 	const int server_port_;
 	const int server_backlog_;
-	const char * const index_name_;
+	const Config& config_;
 	const PatternParams& pp_;
 	AlnSinkSam& template_msink_;
 

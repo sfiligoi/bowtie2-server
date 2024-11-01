@@ -2002,13 +2002,27 @@ bool PatternSourceServiceFactory::find_request_terminator(const char str[]) {
 }
 
 // just return the config
-void PatternSourceServiceFactory::reply_config(int fd) {
+bool PatternSourceServiceFactory::reply_config(int fd, bool is_header) {
+	bool noerr = true;
 	// TODO
 	char buf[2048]; // we guarantee that none of the fields will be larger
-	sprintf(buf,"BT2SRV-Version: %s\n",BOWTIE2_VERSION);
-	try_write_str(fd,buf);
-	sprintf(buf,"Index-Name: %s\n",this->index_name_);
-	try_write_str(fd,buf);
+	const char *headstr = "";
+	if (is_header) headstr="X-"; // BT2SRV already in the string
+	sprintf(buf,"%sBT2SRV-Version: %s\n",headstr,BOWTIE2_VERSION);
+	noerr = noerr && write_str(fd,buf);
+	if (is_header) headstr="X-BT2SRV-"; // fully qualify the rest
+	sprintf(buf,"%sIndex-Name: %s\n",headstr,this->config_.index_name);
+	noerr = noerr && write_str(fd,buf);
+	sprintf(buf,"%sSeed-Len: %i\n",headstr,this->config_.seedLen);
+	noerr = noerr && write_str(fd,buf);
+	sprintf(buf,"%sSeed-Rounds: %i\n",headstr,this->config_.seedRounds);
+	noerr = noerr && write_str(fd,buf);
+	sprintf(buf,"%sMax-DP-Streak: %i\n",headstr,this->config_.maxDpStreak);
+	noerr = noerr && write_str(fd,buf);
+	sprintf(buf,"%sKHits: %i\n",headstr,this->config_.khits);
+	noerr = noerr && write_str(fd,buf);
+
+	return noerr;
 }
 
 // this is the real alignment happens
@@ -2098,7 +2112,7 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 			finish_header_read(client_fd, buf, nels);
 			// reply with my details on simple get
 			if (write_str(client_fd,"HTTP/1.0 200 OK\n\n")) {
-				obj->reply_config(client_fd);
+				obj->reply_config(client_fd, false);
 			}
 		} else if ((nels>=4)&&(memcmp(buf,"GET ",4)==0)) {
 			// any other get is invalid
@@ -2117,13 +2131,10 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 				long int data_size = find_content_length(buf);
 				// TODO: negative number OK, means 2xnewline terminated
 				// fprintf(stderr,"PatternSourceServiceFactory::Client> align on %i\n",client_fd);
-				char hwbuf[128];
-				if (term) {
-					sprintf(hwbuf,"HTTP/1.0 200 OK\nX-BT2SRV-Terminator: 1\n\n");
-				} else {
-					sprintf(hwbuf,"HTTP/1.0 200 OK\n\n");
-				}
-				bool noerr = write_str(client_fd,hwbuf);
+				bool noerr = write_str(client_fd, "HTTP/1.0 200 OK\n");
+				if (noerr) noerr = obj->reply_config(client_fd, true);
+				if (noerr && term) noerr = write_str(client_fd, "X-BT2SRV-Terminator: 1\n");
+				if (noerr) noerr = write_str(client_fd, "\n"); // terminate header
 				if (noerr) {
 					// the align method will keep reading the input
 					noerr = obj->align(client_fd, data_size);
