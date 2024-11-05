@@ -4586,6 +4586,8 @@ static void webLoadWorker(void *vp) {
 #endif /* BT2WEBCLIENT */
 
 
+#ifndef BT2WEBCLIENT /* BT2WEBCLIENT */
+
 #ifndef _WIN32
 /**
  * Print friendly-ish message pertaining to failed system call.
@@ -4759,7 +4761,6 @@ static void thread_monitor(int pid, int orig_threads, EList<int>& tids, EList<T*
 }
 #endif
 
-#ifndef BT2WEBCLIENT /* BT2WEBCLIENT */
 /**
  * Called once per alignment job.  Sets up global pointers to the
  * shared global data structures, creates per-thread structures, then
@@ -4950,14 +4951,6 @@ static void webLoad(
 	{
 		Timer _t(cerr, "Multiseed full-index search client: ", timing);
 
-#ifndef _WIN32
-		int pid = 0;
-		if(thread_stealing) {
-			pid = getpid();
-			write_pid(thread_stealing_dir.c_str(), pid);
-			thread_counter = 0;
-		}
-#endif
 
 		for(int i = 0; i < nthreads; i++) {
 			tids.push_back(i);
@@ -4969,12 +4962,6 @@ static void webLoad(
 			SLEEP(10);
 		}
 
-#ifndef _WIN32
-		if(thread_stealing) {
-			int orig_threads = nthreads;
-			thread_monitor(pid, orig_threads, tids, threads);
-		}
-#endif
 
 		while(all_threads_done < nthreads) {
 			SLEEP(10);
@@ -4983,11 +4970,6 @@ static void webLoad(
 			delete threads[i];
 		}
 
-#ifndef _WIN32
-		if(thread_stealing) {
-			del_pid(thread_stealing_dir.c_str(), pid);
-		}
-#endif
 	}
 	if(!metricsPerRead && (metricsOfb != NULL || metricsStderr)) {
 		metrics.reportInterval(metricsOfb, metricsStderr, true, NULL);
@@ -5563,7 +5545,11 @@ int bowtie(int argc, const char **argv) {
 				cout << "Press key to continue..." << endl;
 				getchar();
 			}
+#ifndef BT2WEBCLIENT
 			driver<SString<char> >("DNA", bt2index, outfile);
+#else
+			client_driver<SString<char> >("DNA", bt2index, outfile);
+#endif
 		}
 #ifdef WITH_AFFINITY
 		// Always disable observation before observers destruction

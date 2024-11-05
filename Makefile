@@ -240,6 +240,8 @@ BOWTIE2_BIN_LIST := bowtie2-build-s \
   bowtie2-build-l \
   bowtie2-align-server-s \
   bowtie2-align-server-l \
+  bowtie2-align-s \
+  bowtie2-align-l \
   bowtie2-inspect-s \
   bowtie2-inspect-l
 BOWTIE2_BIN_LIST_DBG := bowtie2-build-s-debug \
@@ -309,7 +311,7 @@ endif
 
 all: $(BOWTIE2_BIN_LIST) ;
 allall: $(BOWTIE2_BIN_LIST) $(BOWTIE2_BIN_LIST_DBG) $(BOWTIE2_BIN_LIST_SAN) ;
-both: bowtie2-align-server-s bowtie2-build-s bowtie2-align-server-l bowtie2-build-l ;
+both: bowtie2-align-server-s bowtie2-build-s bowtie2-align-server-l bowtie2-build-l bowtie2-align-s bowtie2-align-l;
 both-debug: bowtie2-align-server-s-debug bowtie2-build-s-debug bowtie2-align-server-l-debug bowtie2-build-l-debug ;
 both-sanitized: bowtie2-align-server-s-sanitized bowtie2-build-s-sanitized bowtie2-align-server-l-sanitized bowtie2-build-l-sanitized ;
 
@@ -403,6 +405,22 @@ bowtie2-align-server-l-debug: bt2_search.cpp $(SEARCH_CPPS) $(SHARED_CPPS) $(HEA
 	$(CXX) $(DEBUG_FLAGS) \
 		$(DEBUG_DEFS) $(CXXFLAGS) \
 		$(DEFS) -DBOWTIE2 -DBOWTIE_64BIT_INDEX  \
+		$(CPPFLAGS) \
+		-o $@ $< \
+		$(SHARED_CPPS) $(SEARCH_CPPS_MAIN) \
+		$(LDFLAGS) $(LDLIBS)
+
+#
+# bowtie2-align targets
+#
+
+# we don't really have a short version, just for backwards compatibility
+bowtie2-align-s: bowtie2-align-l
+	ln -s bowtie2-align-l bowtie2-align-s
+
+bowtie2-align-l: bt2_search.cpp $(SEARCH_CPPS) $(SHARED_CPPS) $(HEADERS) $(SEARCH_FRAGMENTS)
+	$(CXX) $(RELEASE_FLAGS) $(RELEASE_DEFS) $(CXXFLAGS) \
+		$(DEFS) -DBT2WEBCLIENT -DBOWTIE2 -DBOWTIE_64BIT_INDEX $(NOASSERT_FLAGS)  \
 		$(CPPFLAGS) \
 		-o $@ $< \
 		$(SHARED_CPPS) $(SEARCH_CPPS_MAIN) \
