@@ -2244,8 +2244,9 @@ bool PatternSourceWebClient::socketConnect(int fd, struct addrinfo &res, int por
 	const socklen_t addrlen = sizeof(address);
 	address.sin_family = AF_INET;
 	address.sin_addr = ((struct sockaddr_in *) res.ai_addr)->sin_addr;
-	address.sin_port = port;
-	return connect(fd, (struct sockaddr*)&address, addrlen)==0;
+	address.sin_port = htons(port);
+	const int rc = connect(fd, (struct sockaddr*)&address, addrlen);
+	return rc==0;
 }
 
 // send initial request header, and check the reply code
@@ -2258,13 +2259,14 @@ bool PatternSourceWebClient::initialHandshake(int fd) {
 		// no need to be fancy (for now)
 		int cnt = ::read(fd, buf, 15);
 		success = ( (cnt==15) && 
-			    (memcmp(buf,"HTTP/1.0 200 OK\n",15)==0) );
+			    (memcmp(buf,"HTTP/1.0 200 OK",15)==0) );
 	}
 	return success;
 }
 
 bool PatternSourceWebClient::parseHeader(int fd, const PatternSourceWebClient::Config& config) {
 	// TODO
+	return true;
 }
 
 // called by contructor, assumes all but fd have been initialized
