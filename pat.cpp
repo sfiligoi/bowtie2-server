@@ -28,6 +28,8 @@
 #include "sstring.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/types.h>
+#include <netdb.h>
 
 #include "pat.h"
 #include "filebuf.h"
@@ -2186,6 +2188,137 @@ void tooManyQualities(const BTString& read_name) {
 	cerr << "Error: Read " << read_name << " has more quality values than read "
 		 << "characters." << endl;
 	throw 1;
+}
+
+// ================== PatternSourceWebClient
+
+void PatternSourceWebClient::ReadElement::clear_and_alloc(size_t size) {
+	if  (capacity<size) {
+		if (tab6_str!=NULL) delete[] tab6_str;
+		tab6_str = new char[size];
+		capacity = size;
+	} // else, reuse the same buffer
+	len = 0;
+}
+
+void PatternSourceWebClient::ReadElement::append(const char *str, size_t str_len) {
+	assert((len+str_len)<=capacity);
+	memcpy(tab6_str+len,str,str_len);
+	len+=str_len;
+}
+
+void PatternSourceWebClient::ReadElement::append(const char chr) {
+	assert(len<capacity);
+	tab6_str[len] = chr;
+	len++;
+}
+
+// Returns a new string in tab6 format
+// Caller gets ownership of the pointer
+// Note that the returned size does not include the terminating null character
+void PatternSourceWebClient::ReadElement::readPair2Tab6(const Read& read_a, const Read& read_b) {
+	size_t total_len = read_a.name.length()+1+read_a.patFw.length()+1+read_a.qual.length();
+	if (!read_b.empty()) {
+		// paired
+		total_len += 1+read_b.patFw.length()+1+read_b.qual.length();
+	}
+	ReadElement& out = *this;
+	out.clear_and_alloc(total_len+1);
+	out.append(read_a.name.buf(),read_a.name.length());
+	out.append('\t');
+	out.append(read_a.patFw.buf(),read_a.patFw.length());
+	out.append('\t');
+	out.append(read_a.qual.buf(),read_a.qual.length());
+	if (!read_b.empty()) {
+		out.append('\t');
+		out.append(read_b.patFw.buf(),read_b.patFw.length());
+		out.append('\t');
+		out.append(read_b.qual.buf(),read_b.qual.length());
+	}
+	out.append('\0');
+}
+
+bool PatternSourceWebClient::socketConnect(int fd, struct addrinfo &res, int port) {
+	assert(res->ai_family==AF_INET);
+	struct sockaddr_in address;
+	const socklen_t addrlen = sizeof(address);
+	address.sin_family = AF_INET;
+	address.sin_addr = ((struct sockaddr_in *) res.ai_addr)->sin_addr;
+	address.sin_port = port;
+	return connect(fd, (struct sockaddr*)&address, addrlen)==0;
+}
+
+// send initial request header, and check the reply code
+bool PatternSourceWebClient::initialHandshake(int fd) {
+	// Standard request the server can understand
+	bool success = write_str(fd,"PUT /align HTTP/1.0\nUser-Agent: BT2CLT\nAccept: */*\nX-BT2SRV-Request-Terminator: 1\n\n");
+	if (success) {
+		char buf[16];
+		// we excpect a very well defined reply on success
+		// no need to be fancy (for now)
+		int cnt = ::read(fd, buf, 15);
+		success = ( (cnt==15) && 
+			    (memcmp(buf,"HTTP/1.0 200 OK\n",15)==0) );
+	}
+	return success;
+}
+
+bool PatternSourceWebClient::parseHeader(int fd, const PatternSourceWebClient::Config& config) {
+	// TODO
+}
+
+// called by contructor, assumes all but fd have been initialized
+int PatternSourceWebClient::fdInit(PatternSourceWebClient *obj) {
+	struct addrinfo hints;
+	bzero(&hints, sizeof(hints));
+	hints.ai_family = AF_INET; // TODO: Consider supporting IPv6, too
+	hints.ai_socktype = SOCK_STREAM;
+	struct addrinfo *res;
+	if (getaddrinfo(obj->server_hostname_, NULL, &hints, &res)!=0) {
+		// host name resolution failed, get out immediatelly
+		obj->isConnected_ = false;
+		return -1;
+	}
+
+	int fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (fd<0) {
+		// this should never happen, but if it does, quit fast
+		freeaddrinfo(res);
+		obj->isConnected_ = false;
+		return -1;
+	}
+	bool success = false;
+	for (struct addrinfo *ires = res; ires!=NULL; ires=ires->ai_next) {
+		success = socketConnect(fd, *ires, obj->server_port_);
+		if (success) break;
+	}
+	freeaddrinfo(res); // we do not need the DNS data anymore
+
+	if (success) {
+		success = initialHandshake(fd);
+	}
+
+	if (success) {
+		success = parseHeader(fd,obj->config_);
+	}
+
+	if (success) {
+		obj->isConnected_ = true;
+	} else {
+		obj->isConnected_ = false;
+		close(fd);
+		fd = -1;
+	}
+	return fd;
+}
+
+// thread procedures
+void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
+	// TODO
+}
+
+void PatternSourceWebClient::receiveDataWorker(PatternSourceWebClient *obj) {
+	// TODO
 }
 
 #ifdef USE_SRA
