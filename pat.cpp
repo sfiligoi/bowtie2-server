@@ -1817,6 +1817,8 @@ bool RawPatternSource::parse(Read& r, Read& rb, TReadId rdid) const {
 
 
 
+// ================== PatternSourceServiceFactory
+
 int PatternSourceServiceFactory::start_listening(int port, int backlog) {
 	const int server_fd = socket(AF_INET, SOCK_STREAM,0);
 	if (server_fd==-1) {
@@ -1932,7 +1934,7 @@ void PatternSourceServiceFactory::finish_header_read(int fd, char *init_buf, int
 // read until \n\n detected
 // can NOT go over \n\n
 // return true if we read right up to t\n\n
-bool PatternSourceServiceFactory::read_header(int fd, char *buf, int& buf_len) {
+inline bool pat_read_header(int fd, int MAX_HEADER_SIZE, char *buf, int& buf_len) {
 	int n_nl = 0; // nr of consecutive \n
 	int len = buf_len;
 	for (int i=0; i<len; i++) {
@@ -1981,6 +1983,10 @@ bool PatternSourceServiceFactory::read_header(int fd, char *buf, int& buf_len) {
 	// fprintf(stderr, "WARN: Header too long\n");
 	buf_len = len;
 	return false;
+}
+
+bool PatternSourceServiceFactory::read_header(int fd, char *buf, int& buf_len) {
+	return pat_read_header(fd, MAX_HEADER_SIZE, buf, buf_len);
 }
 
 long int PatternSourceServiceFactory::find_content_length(const char str[]) {
@@ -2153,14 +2159,10 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 		} else if ( ((nels>=5)&&(memcmp(buf,"POST ",5)==0)) ||
 			    ((nels>=4)&&(memcmp(buf,"PUT ",4)==0))  ){
 			// any other post or put is invalid
-			//buf[nels] = 0;
-			//fprintf(stderr, "NFO: Received unsupported PUT/POST: '%s'\n", buf);
 			try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
 			// empty input buffer, so the client is not surprised
 			finish_header_read(client_fd, buf, nels);
 		} else {
-			//buf[nels] = '\0';
-			//fprintf(stderr, "INFO: Received unsupported method: '%s'\n",buf);
 			// refuse any other request
 			try_write_str(client_fd,"HTTP/1.0 405 Method Not Allowed\nAllow: GET, POST\n\n");
 			// just drop connecton, we do not know if it is even a valid header
@@ -2226,16 +2228,23 @@ void PatternSourceWebClient::ReadElement::readPair2Tab6(const Read& read_a, cons
 	out.clear_and_alloc(total_len+1);
 	out.append(read_a.name.buf(),read_a.name.length());
 	out.append('\t');
-	out.append(read_a.patFw.buf(),read_a.patFw.length());
+	out.append(read_a.patFw.toZBuf(),read_a.patFw.length());
 	out.append('\t');
-	out.append(read_a.qual.buf(),read_a.qual.length());
+	out.append(read_a.qual.toZBuf(),read_a.qual.length());
 	if (!read_b.empty()) {
 		out.append('\t');
-		out.append(read_b.patFw.buf(),read_b.patFw.length());
+		out.append(read_b.patFw.toZBuf(),read_b.patFw.length());
 		out.append('\t');
-		out.append(read_b.qual.buf(),read_b.qual.length());
+		out.append(read_b.qual.toZBuf(),read_b.qual.length());
 	}
 	out.append('\0');
+}
+
+// read until \n\n detected
+// can NOT go over \n\n
+// return true if we read right up to t\n\n
+bool PatternSourceWebClient::read_header(int fd, char *buf, int& buf_len) {
+	return pat_read_header(fd, MAX_HEADER_SIZE, buf, buf_len);
 }
 
 bool PatternSourceWebClient::socketConnect(int fd, struct addrinfo &res, int port) {
@@ -2265,8 +2274,22 @@ bool PatternSourceWebClient::initialHandshake(int fd) {
 }
 
 bool PatternSourceWebClient::parseHeader(int fd, const PatternSourceWebClient::Config& config) {
-	// TODO
-	return true;
+	char buf[MAX_HEADER_SIZE+1];
+	int buf_len = 0;
+	// read the remainder of the header into the buffer
+	bool success = read_header(fd, buf, buf_len);
+	buf[buf_len] = 0;
+	if (success) {
+		// we rely on the terminator to detect successful completion
+		// so make sure the server is promising one
+		success = (strstr(buf,"\nX-BT2SRV-Terminator: 1")!=NULL);
+		if (!success) {
+			fprintf(stderr,"ERROR: Server does not appear to be valid BT2SRV\n");
+			//fprintf(stderr,"Header: %s\n",buf);
+		}
+	}
+	// TODO: Do the actual parsing and comparing to the config
+	return success;
 }
 
 // called by contructor, assumes all but fd have been initialized
@@ -2316,11 +2339,107 @@ int PatternSourceWebClient::fdInit(PatternSourceWebClient *obj) {
 
 // thread procedures
 void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
-	// TODO
+	if (!(obj->isConnected_)) return; // initialization failed, exit fast
+	LockedEmptyQueueCV& psq_empty = obj->psq_empty_;
+	LockedSendQueueCV&  psq_send  = obj->psq_send_;
+	int fd = obj->socket_fd_;
+	ReadElement *re_buf = new ReadElement[RE_PER_PACKET];
+	int send_alloc = RE_PER_PACKET*512;
+	char* send_str = new char[send_alloc];
+	bool found_null = false;
+	while (!found_null) {
+		int n_re = 0;
+		psq_send.popUpToN(RE_PER_PACKET, re_buf, n_re);
+		int re_len = 0;
+		for (int i=0; i<n_re; i++) {
+			re_len += re_buf[i].len+1;
+		}
+		if (re_len>send_alloc) {
+			delete[] send_str;
+			send_alloc = re_len;
+			send_str = new char[send_alloc];
+		}
+		re_len = 0;
+		for (int i=0; i<n_re; i++) {
+			if (re_buf[i].empty()) {
+				// finalize() put this in to signal we are done
+				found_null = true;
+			} else {
+				memcpy(send_str+re_len, re_buf[i].buf(), re_buf[i].len);
+				re_len += re_buf[i].len;
+				send_str[re_len] = '\n';
+				re_len += 1;
+			}
+		}
+		if (!found_null) {
+			// we do not need the message bufs anymore, send it back for 
+			psq_empty.pushN(n_re, re_buf);
+		} else {
+			// we just cleanup, no point in sending it back to the empty queue
+			for (int i=0; i<n_re; i++) {
+				re_buf[i].reset();
+			}
+		}
+		send_str[re_len] = 0;
+		bool success = write_str(fd, send_str, re_len);
+		if (!success) {
+			// TODO, do something about the error
+			fprintf(stderr, "WARN: Client Write failed\n");
+		}
+
+	}
+
+	//fprintf(stderr, "Client Write done\n");
+
+	// in order to not lose any buffered data
+	// tell the server the socket is closing
+	// and there will be no more data coming its way
+	shutdown(fd, SHUT_WR);
+
+	delete[] send_str;
+	delete[] re_buf;
 }
 
 void PatternSourceWebClient::receiveDataWorker(PatternSourceWebClient *obj) {
-	// TODO
+	if (!(obj->isConnected_)) return; // initialization failed, exit fast
+	OutFileBuf& obuf = obj->obuf_;
+	int fd = obj->socket_fd_;
+	const int recv_alloc = 64*1024; // use a reasonably large buffer
+	char* recv_str = new char[recv_alloc+16]; // need some space for null termination
+	int recv_filled = 0;
+	bool found_end = false;
+	while (!found_end) {
+		int cnt = ::read(fd, recv_str+recv_filled, recv_alloc-recv_filled);
+		if (cnt<1) {
+			// retry once
+			cnt = ::read(fd, recv_str, recv_alloc);
+		}
+		if (cnt>0) {
+			recv_filled+=cnt;
+			constexpr int endlen = 20; // strlen("@CO BT2SRV All Done\n")
+			if (recv_filled>=endlen) {
+				recv_str[recv_filled] = 0;
+				char *end_str = strstr(recv_str,"@CO BT2SRV All Done\n");
+				if (end_str==NULL) {
+					// not finished, just pass through
+					obuf.writeChars(recv_str,recv_filled);
+				} else {
+					found_end = true;
+					// we will ignore anything after the end string
+					if (end_str!=recv_str) { // just avoid emoty strings
+						obj->obuf_.writeChars(recv_str,end_str-recv_str);
+					}
+				}
+				recv_filled = 0;
+			} // else, fill a bit more of the buffer before making a decision
+		} else {
+			// TODO, do something about the error
+		}
+	}
+	// TODO: propagate found_end vs error to the external world
+	delete[] recv_str;
+	close(fd);
+	obj->isConnected_ = false;
 }
 
 #ifdef USE_SRA

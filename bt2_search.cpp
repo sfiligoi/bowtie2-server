@@ -4533,7 +4533,8 @@ static void webLoadWorker(void *vp) {
 	OutFileBuf*             metricsOfb = multiseed_metricsOfb;
 
 	{
-		const int n_writecache = 50; // can be small-ish, we just need enough for a couple IP packets, and each line is O(100) bytes
+		// we want it slightly larger the internal buffer, but more does not hurt
+		const int n_writecache = 2*PatternSourceWebClient::RE_PER_PACKET;
 		PatternSourceWebClient::Config config("todo"); //TODO
 		PatternSourceWebClient cobj(multiseedServerHostname.c_str(), multiseedServerPort, *metricsOfb, config, n_writecache);
 		if (!cobj.isConnected()) {

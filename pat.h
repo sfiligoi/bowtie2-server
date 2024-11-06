@@ -1808,8 +1808,8 @@ private:
 
 	// write a string with retries, report any errors
 	// returns false in case of error
-	static bool write_str(int fd, const char *str) {
-		int len = strlen(str);
+	static bool write_str(int fd, const char *str, const int str_len) {
+		int len = str_len;
 		do {
 			int written = ::write(fd,str,len);
 			if (written<1) {
@@ -1826,6 +1826,10 @@ private:
 			}
 		} while(len>0);
 		return true;
+	}
+	static bool write_str(int fd, const char *str) {
+		int len = strlen(str);
+		return write_str(fd, str, len);
 	}
 
 	// read until \n\n detected, discard content
@@ -1933,7 +1937,7 @@ public:
 	public:
 		ReadElement() : tab6_str(NULL), capacity(0), len(0) {}
 		~ReadElement() {
-			if (tab6_str!=NULL) delete[] tab6_str;
+			//if (tab6_str!=NULL) delete[] tab6_str;
 		}
 
 		// due to owned pointer, prevent copying of the object
@@ -1956,6 +1960,7 @@ public:
 		// fill this buffer with tab6 data from the two reads
 		void readPair2Tab6(const Read& read_a, const Read& read_b);
 
+		bool empty() { return tab6_str==NULL; }
 		char *buf() {return tab6_str;};
 		const char *buf() const {return tab6_str;};
 
@@ -1967,6 +1972,11 @@ public:
 		void clear_and_alloc(size_t size);
 		void append(const char *str, size_t str_len);
 		void append(const char chr);
+		void reset() {
+			if (tab6_str!=NULL) delete[] tab6_str;
+			capacity=0;
+			len=0;
+		}
 	};
 
 	class Config {
@@ -2003,7 +2013,9 @@ public:
 		receivet_(receiveDataWorker, this) {}
 
 	~PatternSourceWebClient() {
-		if (isConnected_) finalize();
+		if (isConnected_) finalize(false);
+		sendt_.join();
+		receivet_.join();
 	}
 
 	// will turn false on error
@@ -2019,9 +2031,14 @@ public:
 
 	// Wait for all data to be returned
 	// Return false if anything went wrong
-	bool finalize() {
-		// TBD
+	bool finalize(bool patient=true) {
+		ReadElement el;
+		psq_send_.push(el); // this will signal the sendt_ thread to terminate
+		// TODO: wait to make sure it worked
+		return true;
 	}
+
+	static constexpr int RE_PER_PACKET = 40; // can be small-ish, we just need enough for a couple IP packets, and each line is O(100) bytes
 
 private:
 	
@@ -2045,6 +2062,14 @@ private:
 			cv_.notify_all();
 		}
 
+		void pushN(int buf_len, T buf[]) {
+			std::unique_lock<std::mutex> lk(m_);
+			for (int i=0; i<buf_len; i++) {
+				q_.push(buf[i]);
+			}
+			cv_.notify_all();
+		}
+
 		// wait for data, if none in the queue
 		T pop() {
 			std::unique_lock<std::mutex> lk(m_);
@@ -2052,6 +2077,19 @@ private:
 			T ret(q_.front());
 			q_.pop();
 			return ret;
+		}
+
+		// wait for data, if none in the queue
+		void popUpToN(int max_read, T buf[], int& buf_len) {
+			std::unique_lock<std::mutex> lk(m_);
+			cv_.wait(lk, [this] { return !q_.empty();});
+			buf_len = 0;
+			while (buf_len<max_read) {
+				buf[buf_len] = q_.front();
+				buf_len++;
+				q_.pop();
+				if (q_.empty()) break;
+			}
 		}
 
 	protected:
@@ -2108,8 +2146,8 @@ private:
 
 	// write a string with retries, report any errors
 	// returns false in case of error
-	static bool write_str(int fd, const char *str) {
-		int len = strlen(str);
+	static bool write_str(int fd, const char *str, const int str_len) {
+		int len = str_len;
 		do {
 			int written = ::write(fd,str,len);
 			if (written<1) {
@@ -2126,6 +2164,11 @@ private:
 			}
 		} while(len>0);
 		return true;
+	}
+
+	static bool write_str(int fd, const char *str) {
+		int len = strlen(str);
+		return write_str(fd, str, len);
 	}
 
 	// read until \n\n detected, discard content
