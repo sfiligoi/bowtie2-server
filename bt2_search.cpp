@@ -5324,7 +5324,7 @@ static void driver(
 template<typename TStr>
 static void client_driver(
 	const char * type,
-	const string& bt2indexBase,
+	const string& bt2index,
 	const string& outfile)
 {
 	if(gVerbose || startVerbose)  {
@@ -5371,8 +5371,6 @@ static void client_driver(
 	} else {
 		fout = new OutFileBuf();
 	}
-	// Initialize Ebwt object and read in header
-	adjIdxBase = adjustEbwtBase(argv0, bt2indexBase, gVerbose);
 
 		if(gVerbose || startVerbose) {
 			cerr << "Creating PatternSource: "; logTime(cerr, true);
@@ -5401,10 +5399,10 @@ static void client_driver(
 		}
 
 		//Note: basename may modify the input buffer, so make a copy
-		char adjIdxBaseBuf[1024];
-		strncpy(adjIdxBaseBuf,adjIdxBase.c_str(),1023);
-		adjIdxBaseBuf[1023] = '\0';
-		const char *ebwt_basename = basename(adjIdxBaseBuf);
+		char bt2indexBuf[1024];
+		strncpy(bt2indexBuf,bt2index.c_str(),1023);
+		bt2indexBuf[1023] = '\0';
+		const char *ebwt_basename = basename(bt2indexBuf);
 
 		// Do the search for all input reads
 		assert(patsrc != NULL);
