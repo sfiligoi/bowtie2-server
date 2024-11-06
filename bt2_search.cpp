@@ -65,7 +65,7 @@
 
 using namespace std;
 
-#if 0
+#ifdef BT2WEBCLIENT
 typedef PatternSourceReadAheadFactory PSFactory;
 #else
 typedef PatternSourceServiceFactory PSFactory;
@@ -263,6 +263,11 @@ static bool bowtie2p5;
 static string logDps;         // log seed-extend dynamic programming problems
 static string logDpsOpp;      // log mate-search dynamic programming problems
 
+#ifdef BT2WEBCLIENT
+static string multiseedServerHostname;   // Hostname where the alignment server lives
+#endif
+static int    multiseedServerPort;       // Port used by the alignment server
+
 static string bt2index;      // read Bowtie 2 index from files with this prefix
 static EList<pair<int, string> > extra_opts;
 static size_t extra_opts_cur;
@@ -272,6 +277,44 @@ static EList<string> sra_accs;
 #endif
 
 #define DMAX std::numeric_limits<double>::max()
+
+/**
+ * Parse a T string 'str'.
+ */
+template<typename T>
+T parse(const char *s) {
+	T tmp;
+	stringstream ss(s);
+	ss >> tmp;
+	return tmp;
+}
+
+/**
+ * Parse a pair of Ts from a string, 'str', delimited with 'delim'.
+ */
+template<typename T>
+pair<T, T> parsePair(const char *str, char delim) {
+	string s(str);
+	EList<string> ss;
+	tokenize(s, delim, ss);
+	pair<T, T> ret;
+	ret.first = parse<T>(ss[0].c_str());
+	ret.second = parse<T>(ss[1].c_str());
+	return ret;
+}
+
+/**
+ * Parse a pair of Ts from a string, 'str', delimited with 'delim'.
+ */
+template<typename T>
+void parseTuple(const char *str, char delim, EList<T>& ret) {
+	string s(str);
+	EList<string> ss;
+	tokenize(s, delim, ss);
+	for(size_t i = 0; i < ss.size(); i++) {
+		ret.push_back(parse<T>(ss[i].c_str()));
+	}
+}
 
 static void set_format(int &current_format, file_format format) {
 	if (current_format == UNKNOWN)
@@ -477,6 +520,18 @@ static void resetOptions() {
 	bowtie2p5	    = false;
 	logDps.clear();         // log seed-extend dynamic programming problems
 	logDpsOpp.clear();      // log mate-search dynamic programming problems
+	multiseedServerPort     = 8080;          // Use standard non-privileged HTTP port by default
+#ifdef BT2WEBCLIENT
+	{
+		const char * env = getenv("BT2CLT_SERVER_PORT");
+		if (env!=NULL) multiseedServerPort = parse<int>(env);
+	}
+	multiseedServerHostname = "localhost";   // Assume servel lives locally by default
+	{
+		const char * env = getenv("BT2CLT_SERVER_HOST");
+		if (env!=NULL) multiseedServerHostname = env;
+	}
+#endif
 #ifdef USE_SRA
 	sra_accs.clear();
 #endif
@@ -615,6 +670,10 @@ static struct option long_options[] = {
 	{(char*)"seedival",                    required_argument,  0,                   'i'},
 	{(char*)"ignore-quals",                no_argument,        0,                   ARG_IGNORE_QUALS},
 	{(char*)"index",                       required_argument,  0,                   'x'},
+#ifdef BT2WEBCLIENT
+	{(char*)"server-host",                 required_argument,  0,                   ARG_SERVER_HOST},
+#endif
+	{(char*)"server-port",                 required_argument,  0,                   ARG_SERVER_PORT},
 	{(char*)"arg-desc",                    no_argument,        0,                   ARG_DESC},
 	{(char*)"wrapper",                     required_argument,  0,                   ARG_WRAPPER},
 	{(char*)"unpaired",                    required_argument,  0,                   'U'},
@@ -945,44 +1004,6 @@ static int parseInt(int lower, int upper, const char *errmsg, const char *arg) {
  */
 static int parseInt(int lower, const char *errmsg, const char *arg) {
 	return parseInt(lower, std::numeric_limits<int>::max(), errmsg, arg);
-}
-
-/**
- * Parse a T string 'str'.
- */
-template<typename T>
-T parse(const char *s) {
-	T tmp;
-	stringstream ss(s);
-	ss >> tmp;
-	return tmp;
-}
-
-/**
- * Parse a pair of Ts from a string, 'str', delimited with 'delim'.
- */
-template<typename T>
-pair<T, T> parsePair(const char *str, char delim) {
-	string s(str);
-	EList<string> ss;
-	tokenize(s, delim, ss);
-	pair<T, T> ret;
-	ret.first = parse<T>(ss[0].c_str());
-	ret.second = parse<T>(ss[1].c_str());
-	return ret;
-}
-
-/**
- * Parse a pair of Ts from a string, 'str', delimited with 'delim'.
- */
-template<typename T>
-void parseTuple(const char *str, char delim, EList<T>& ret) {
-	string s(str);
-	EList<string> ss;
-	tokenize(s, delim, ss);
-	for(size_t i = 0; i < ss.size(); i++) {
-		ret.push_back(parse<T>(ss[i].c_str()));
-	}
 }
 
 static string applyPreset(const string& sorig, Presets& presets) {
@@ -1414,6 +1435,10 @@ static void parseOption(int next_option, const char *arg) {
 	case ARG_1MM_MINLEN:       do1mmMinLen = parse<size_t>(arg); break;
 	case ARG_NOISY_HPOLY: noisyHpolymer = true; break;
 	case 'x': bt2index = arg; break;
+#ifdef BT2WEBCLIENT
+	case ARG_SERVER_HOST: multiseedServerHostname = arg; break;
+#endif
+	case ARG_SERVER_PORT: multiseedServerPort = parse<int>(arg); break;
 	case ARG_PRESET_VERY_FAST_LOCAL: localAlign = true;
 	case ARG_PRESET_VERY_FAST: {
 		presetList.push_back("very-fast%LOCAL%"); break;
@@ -1831,12 +1856,16 @@ createPatsrcFactory(
 #define PTHREAD_ATTRS (PTHREAD_CREATE_JOINABLE | PTHREAD_CREATE_DETACHED)
 
 static PSFactory* multiseed_readahead_factory;
+#ifndef BT2WEBCLIENT
 static Ebwt*                    multiseed_ebwtFw;
 static Ebwt*                    multiseed_ebwtBw;
 static Scoring*                 multiseed_sc;
 static BitPairReference*        multiseed_refs;
 static AlignmentCache*          multiseed_ca; // seed cache
 static AlnSink*                 multiseed_msink;
+#else
+static OutFileBuf*              multiseed_samOfb;
+#endif
 static OutFileBuf*              multiseed_metricsOfb;
 
 /**
@@ -2998,6 +3027,7 @@ public:
 	}
 };
 
+#ifndef BT2WEBCLIENT
 /**
  * Called once per thread.  Sets up per-thread pointers to the shared global
  * data structures, creates per-thread structures, then enters the alignment
@@ -4508,6 +4538,81 @@ static void multiseedSearchWorker_2p5(void *vp) {
 	return;
 }
 
+#else /* BT2WEBCLIENT */
+/**
+ * Called once per thread.  Sets up per-thread pointers to the shared global
+ * data structures, creates per-thread structures, then enters the client
+ * loop.  The general flow of the alignment loop is:
+ *
+ * - Get the next read/pair
+ * - Send the pair to the server
+ * - Read the result back
+ * - Forward result to OutBuf
+ */
+static void webLoadWorker(void *vp) {
+	//int tid = *((int*)vp);
+	thread_tracking_pair *p = (thread_tracking_pair*) vp;
+	int tid = p->tid;
+	PSFactory& readahead_factory =  *multiseed_readahead_factory;
+	OutFileBuf*             samOfb = multiseed_samOfb;
+
+	{
+		// we want it slightly larger the internal buffer, but more does not hurt
+		const int n_writecache = 2*PatternSourceWebClient::RE_PER_PACKET;
+		PatternSourceWebClient::Config config("todo"); //TODO
+		PatternSourceWebClient cobj(multiseedServerHostname.c_str(), multiseedServerPort, *samOfb, config, n_writecache);
+		if (!cobj.isConnected()) {
+			fprintf(stderr, "ABORTING: Failed to connect to %s:%i!\n",multiseedServerHostname.c_str(),multiseedServerPort);
+			return;
+		}
+		RandomSource rnd;
+
+		// Used by thread with threadid == 1 to measure time elapsed
+		//time_t iTime = time(0);
+
+		bool done = false;
+		while(!done) {
+	   	   PSFactory::ReadAhead psrah(readahead_factory);
+		   PatternSourcePerThread* const ps = psrah.ptr();
+                   do {
+			pair<bool, bool> ret = psrah.nextReadResult();
+			bool success = ret.first;
+			done = ret.second;
+			if(!success && done) {
+				break;
+			} else if(!success) {
+				continue;
+			}
+			TReadId rdid = ps->read_a().rdid;
+			bool sample = true;
+			if(sampleFrac < 1.0f) {
+				rnd.init(ROTL(ps->read_a().seed, 2));
+				sample = rnd.nextFloat() < sampleFrac;
+			}
+			if(rdid >= skipReads && rdid < qUpto && sample) {
+				// Align this read/pair
+				if (!cobj.addReadPair(ps->read_a(),ps->read_b())) {
+					done = true;
+					fprintf(stderr, "ABORTING: Connection unexpectedly closed!\n");
+				}
+			} // if(rdid >= skipReads && rdid < qUpto)
+			else if(rdid >= qUpto) {
+				done = true;
+				break;
+			}
+		   } while (ps->nextReadPairReady()); // must read the whole cached buffer
+		} // while(true)
+		cobj.finalize();
+	}
+	p->done->fetch_add(1);
+
+	return;
+}
+#endif /* BT2WEBCLIENT */
+
+
+#ifndef BT2WEBCLIENT /* BT2WEBCLIENT */
+
 #ifndef _WIN32
 /**
  * Print friendly-ish message pertaining to failed system call.
@@ -4680,6 +4785,7 @@ static void thread_monitor(int pid, int orig_threads, EList<int>& tids, EList<T*
 	}
 }
 #endif
+
 /**
  * Called once per alignment job.  Sets up global pointers to the
  * shared global data structures, creates per-thread structures, then
@@ -4731,7 +4837,13 @@ static void multiseedSearch(
 #if 0
 	PatternSourceReadAheadFactory readahead_factory(patsrc,pp,4*nthreads+1);
 #else
-	PatternSourceServiceFactory readahead_factory(patsrc,pp,4*nthreads+1, msink, ebwt_basename);
+	PatternSourceServiceFactory::Config readahead_factory_config(ebwt_basename);
+	readahead_factory_config.seedLen = multiseedLen;
+	readahead_factory_config.seedRounds = nSeedRounds;
+	readahead_factory_config.maxDpStreak = maxDpStreak;
+	readahead_factory_config.khits = allHits ? -1 : khits;
+
+	PatternSourceServiceFactory readahead_factory(multiseedServerPort, patsrc,pp,4*nthreads+1, msink, readahead_factory_config);
 #endif
 	multiseed_readahead_factory = &readahead_factory;
 
@@ -4823,8 +4935,80 @@ static void multiseedSearch(
 	}
 }
 
+#else /* BT2WEBCLIENT */
+/**
+ * Called once per alignment client.  Sets up global pointers to the
+ * shared global data structures, creates per-thread structures, then
+ * enters the reaqest loop.
+ */
+static void webLoad(
+	const PatternParams& pp,
+	PatternComposer& patsrc,      // pattern source
+	OutFileBuf *samOfb,              // output buffer
+	const char ebwt_basename[],   // logical index name
+	OutFileBuf *metricsOfb)
+{
+	multiseed_samOfb          = samOfb;
+	// Note: The client code is currently not thread-safe
+	//       Since most of the work is done on the server, it is not a major limitation
+	// TODO: Allow for proper-multi-threading,
+	//       i.e. multiple socket connections to the server
+	nthreads = 1;
+
+#ifndef _WIN32
+	sigset_t set;
+	sigemptyset(&set);
+	sigaddset(&set, SIGPIPE);
+	pthread_sigmask(SIG_BLOCK, &set, NULL);
+#endif
+	EList<int> tids;
+	EList<std::thread*> threads(nthreads);
+	EList<thread_tracking_pair> tps;
+	// Important: Need at least nthreads+1 elements, more is OK
+	PatternSourceReadAheadFactory readahead_factory(patsrc,pp,4*nthreads+1);
+	multiseed_readahead_factory = &readahead_factory;
+
+	tps.resize(std::max(nthreads, thread_ceiling));
+	threads.reserveExact(std::max(nthreads, thread_ceiling));
+	tids.reserveExact(std::max(nthreads, thread_ceiling));
+
+
+	// Start the metrics thread
+
+	std::atomic<int> all_threads_done;
+	all_threads_done = 0;
+	{
+		Timer _t(cerr, "Multiseed full-index search client: ", timing);
+
+
+		for(int i = 0; i < nthreads; i++) {
+			tids.push_back(i);
+			tps[i].tid = i;
+			tps[i].done = &all_threads_done;
+
+			threads.push_back(new std::thread(webLoadWorker, (void*)&tps[i]));
+			threads[i]->detach();
+			SLEEP(10);
+		}
+
+
+		while(all_threads_done < nthreads) {
+			SLEEP(10);
+		}
+		for (int i = 0; i < nthreads; ++i) {
+			delete threads[i];
+		}
+
+	}
+	if(!metricsPerRead && (metricsOfb != NULL || metricsStderr)) {
+		metrics.reportInterval(metricsOfb, metricsStderr, true, NULL);
+	}
+}
+#endif /* BT2WEBCLIENT */
+
 static string argstr;
 
+#ifndef BT2WEBCLIENT
 template<typename TStr>
 static void driver(
 	const char * type,
@@ -5141,6 +5325,107 @@ static void driver(
 	}
 }
 
+#else /* BT2WEBCLIENT */
+
+template<typename TStr>
+static void client_driver(
+	const char * type,
+	const string& bt2index,
+	const string& outfile)
+{
+	if(gVerbose || startVerbose)  {
+		cerr << "Entered client_driver(): "; logTime(cerr, true);
+	}
+	// Vector of the reference sequences; used for sanity-checking
+	EList<SString<char> > names, os;
+	EList<size_t> nameLens, seqLens;
+	// Read reference sequences from the command-line or from a FASTA file
+	if(!origString.empty()) {
+		// Read fasta file(s)
+		EList<string> origFiles;
+		tokenize(origString, ",", origFiles);
+		parseFastas(origFiles, names, nameLens, os, seqLens);
+	}
+	PatternParams pp(
+		format,        // file format
+		interleaved,   // some or all of the reads are interleaved
+		fileParallel,  // true -> wrap files with separate PairedPatternSources
+		seed,          // pseudo-random seed
+		readsPerBatch, // # reads in a light parsing batch
+		solexaQuals,   // true -> qualities are on solexa64 scale
+		phred64Quals,  // true -> qualities are on phred64 scale
+		integerQuals,  // true -> qualities are space-separated numbers
+		gTrim5,        // amt to hard clip from 5' end
+		gTrim3,        // amt to hard clip from 3' end
+		trimTo,        // trim reads exceeding given length from either 3' or 5'-end
+		fastaContLen,  // length of sampled reads for FastaContinuous...
+		fastaContFreq, // frequency of sampled reads for FastaContinuous...
+		skipReads,     // skip the first 'skip' patterns
+		qUpto,         // max number of queries to read
+		nthreads,      //number of threads for locking
+		outType != OUTPUT_SAM, // whether to fix mate names
+		preserve_tags, // keep existing tags when aligning BAM files
+		align_paired_reads // Align only the paired reads in BAM file
+		);
+	// Open hit output file
+	if(gVerbose || startVerbose) {
+		cerr << "Opening hit output file: "; logTime(cerr, true);
+	}
+	OutFileBuf *fout;
+	if(!outfile.empty()) {
+		fout = new OutFileBuf(outfile.c_str(), false);
+	} else {
+		fout = new OutFileBuf();
+	}
+
+		if(gVerbose || startVerbose) {
+			cerr << "Creating PatternSource: "; logTime(cerr, true);
+		}
+		PatternComposer *patsrc = PatternComposer::setupPatternComposer(
+			queries,     // singles, from argv
+			mates1,      // mate1's, from -1 arg
+			mates2,      // mate2's, from -2 arg
+			mates12,     // both mates on each line, from --12 arg
+			qualities,   // qualities associated with singles
+			qualities1,  // qualities associated with m1
+			qualities2,  // qualities associated with m2
+#ifdef USE_SRA
+			sra_accs,    // SRA accessions
+#endif
+			pp,          // read read-in parameters
+			NULL,        // msink not used by the client
+			gVerbose || startVerbose); // be talkative
+		if(gVerbose || startVerbose) {
+			cerr << "Dispatching to search driver: "; logTime(cerr, true);
+		}
+		// Set up global constraint
+		OutFileBuf *metricsOfb = NULL;
+		if(!metricsFile.empty() && metricsIval > 0) {
+			metricsOfb = new OutFileBuf(metricsFile);
+		}
+
+		//Note: basename may modify the input buffer, so make a copy
+		char bt2indexBuf[1024];
+		strncpy(bt2indexBuf,bt2index.c_str(),1023);
+		bt2indexBuf[1023] = '\0';
+		const char *ebwt_basename = basename(bt2indexBuf);
+
+		// Do the search for all input reads
+		assert(patsrc != NULL);
+		webLoad(
+				pp,      // pattern params
+				*patsrc, // pattern source
+				fout,    // output buffer
+				ebwt_basename, // logical BWT name
+				metricsOfb);
+
+
+		delete patsrc;
+		delete metricsOfb;
+		delete fout;
+}
+#endif /* BT2WEBCLIENT */
+
 // C++ name mangling is disabled for the bowtie() function to make it
 // easier to use Bowtie as a library.
 extern "C" {
@@ -5283,7 +5568,11 @@ int bowtie(int argc, const char **argv) {
 				cout << "Press key to continue..." << endl;
 				getchar();
 			}
+#ifndef BT2WEBCLIENT
 			driver<SString<char> >("DNA", bt2index, outfile);
+#else
+			client_driver<SString<char> >("DNA", bt2index, outfile);
+#endif
 		}
 #ifdef WITH_AFFINITY
 		// Always disable observation before observers destruction

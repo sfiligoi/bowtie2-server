@@ -1677,14 +1677,31 @@ public:
 		bool first_;
 	};
 
+	class Config {
+	public:
+		Config(const char *iname) : 
+			index_name(iname),
+			seedLen(0),
+			maxDpStreak(0),
+			seedRounds(0),
+			khits(-1) {}
+
+		const char *index_name;
+		int seedLen;
+		int maxDpStreak;
+		int seedRounds;
+		int khits; // set to -1 if allHits==true
+	};
+
 	PatternSourceServiceFactory(
+		int server_port,
 		PatternComposer& composer,
 		const PatternParams& pp, size_t n_readahead,
 		AlnSinkSam &msink,
-		const char *index_name):
-		server_port_(3333),
+		const Config& config):
+		server_port_(server_port),
 		server_backlog_(128),
-		index_name_(index_name),
+		config_(config),
 		pp_(pp),
 		template_msink_(msink),
 		psfact_(composer,pp),
@@ -1791,8 +1808,8 @@ private:
 
 	// write a string with retries, report any errors
 	// returns false in case of error
-	static bool write_str(int fd, const char *str) {
-		int len = strlen(str);
+	static bool write_str(int fd, const char *str, const int str_len) {
+		int len = str_len;
 		do {
 			int written = ::write(fd,str,len);
 			if (written<1) {
@@ -1809,6 +1826,10 @@ private:
 			}
 		} while(len>0);
 		return true;
+	}
+	static bool write_str(int fd, const char *str) {
+		int len = strlen(str);
+		return write_str(fd, str, len);
 	}
 
 	// read until \n\n detected, discard content
@@ -1829,7 +1850,8 @@ private:
 	static bool find_request_terminator(const char str[]);
 
 	// just return the config
-	void reply_config(int fd);
+	// if is_header==true, prepend with X-BT2SRV-
+	bool reply_config(int fd, bool is_header);
 
 	// this is the real alignment happens
 	// We only paritally parsed the header
@@ -1887,7 +1909,7 @@ private:
 
 	const int server_port_;
 	const int server_backlog_;
-	const char * const index_name_;
+	const Config& config_;
 	const PatternParams& pp_;
 	AlnSinkSam& template_msink_;
 
@@ -1901,6 +1923,300 @@ private:
 
 	// this must be last, as it gets the obj as parameter during construction
 	std::thread listent_; 			// main, listening thread
+};
+
+// not a real PatternSource, but it is convenient to keep client and server in the same source file
+class PatternSourceWebClient {
+private:
+	class LockedIdleQueueCV;
+public:
+	class ReadElement {
+	private:
+		char    *tab6_str;
+		uint32_t capacity;
+	public:
+		ReadElement() : tab6_str(NULL), capacity(0), len(0) {}
+		~ReadElement() {
+			//if (tab6_str!=NULL) delete[] tab6_str;
+		}
+
+		// due to owned pointer, prevent copying of the object
+		// TODO
+#if 0
+		ReadElement(const ReadElement& other) = delete;
+		ReadElement& operator=(const ReadElement& other) = delete;
+
+		// but allow the move
+		ReadElement(ReadElement&& other) {
+			tab6_str = other.tab6_str;
+			other.tab6_str = NULL;
+			capacity = other.capacity;
+			other.capacity = 0;
+			len = other.len;
+			other.len = 0;
+		}
+#endif
+
+		// fill this buffer with tab6 data from the two reads
+		void readPair2Tab6(const Read& read_a, const Read& read_b);
+
+		bool empty() { return tab6_str==NULL; }
+		char *buf() {return tab6_str;};
+		const char *buf() const {return tab6_str;};
+
+		uint32_t len;
+
+		// =======================
+		// mostly for internal use
+
+		void clear_and_alloc(size_t size);
+		void append(const char *str, size_t str_len);
+		void append(const char chr);
+		void reset() {
+			if (tab6_str!=NULL) delete[] tab6_str;
+			capacity=0;
+			len=0;
+		}
+	};
+
+	class Config {
+	public:
+		Config(const char *iname) : 
+			index_name(iname),
+			seedLen(0),
+			maxDpStreak(0),
+			seedRounds(0),
+			khits(-1) {}
+
+		const char *index_name;
+		int seedLen;
+		int maxDpStreak;
+		int seedRounds;
+		int khits; // set to -1 if allHits==true
+	};
+
+	PatternSourceWebClient(
+		const char *server_hostname,
+		int server_port,
+		OutFileBuf& obuf,
+		const Config& config,
+		int n_writecache):
+		server_hostname_(server_hostname),
+		server_port_(server_port),
+		config_(config),
+		obuf_(obuf),
+		psq_empty_(n_writecache),
+		psq_send_(),
+		isConnected_(false),
+		socket_fd_(fdInit(this)),
+		sendt_(sendDataWorker, this),
+		receivet_(receiveDataWorker, this) {}
+
+	~PatternSourceWebClient() {
+		if (isConnected_) finalize(false);
+		sendt_.join();
+		receivet_.join();
+	}
+
+	// will turn false on error
+	bool isConnected() const {return isConnected_;}
+
+	// will return false on error
+	bool addReadPair(const Read& read_a, const Read& read_b) {
+		ReadElement el(psq_empty_.pop());
+		el.readPair2Tab6(read_a,read_b);
+		psq_send_.push(el);
+		return isConnected_;
+	}
+
+	// Wait for all data to be returned
+	// Return false if anything went wrong
+	bool finalize(bool patient=true) {
+		ReadElement el;
+		psq_send_.push(el); // this will signal the sendt_ thread to terminate
+		// TODO: wait to make sure it worked
+		return true;
+	}
+
+	static constexpr int RE_PER_PACKET = 40; // can be small-ish, we just need enough for a couple IP packets, and each line is O(100) bytes
+
+private:
+	
+	template <typename T>
+	class LockedQueueCV {
+	public:
+		virtual ~LockedQueueCV() {}
+
+		bool empty() {
+			bool ret = false;
+			{
+				std::unique_lock<std::mutex> lk(m_);
+				ret = q_.empty();
+			}
+			return ret;
+		}
+
+		void push(T& ps) {
+			std::unique_lock<std::mutex> lk(m_);
+			q_.push(ps);
+			cv_.notify_all();
+		}
+
+		void pushN(int buf_len, T buf[]) {
+			std::unique_lock<std::mutex> lk(m_);
+			for (int i=0; i<buf_len; i++) {
+				q_.push(buf[i]);
+			}
+			cv_.notify_all();
+		}
+
+		// wait for data, if none in the queue
+		T pop() {
+			std::unique_lock<std::mutex> lk(m_);
+			cv_.wait(lk, [this] { return !q_.empty();});
+			T ret(q_.front());
+			q_.pop();
+			return ret;
+		}
+
+		// wait for data, if none in the queue
+		void popUpToN(int max_read, T buf[], int& buf_len) {
+			std::unique_lock<std::mutex> lk(m_);
+			cv_.wait(lk, [this] { return !q_.empty();});
+			buf_len = 0;
+			while (buf_len<max_read) {
+				buf[buf_len] = q_.front();
+				buf_len++;
+				q_.pop();
+				if (q_.empty()) break;
+			}
+		}
+
+	protected:
+		std::mutex m_;
+		std::condition_variable cv_;
+		std::queue<T> q_;
+	};
+
+	class LockedSendQueueCV : public LockedQueueCV<ReadElement> {
+	public:
+		virtual ~LockedSendQueueCV() {
+			//while (!q_.empty()) {
+			//	ReadElement tmp(q_.pop());
+			//}
+		}
+	};
+
+	class LockedEmptyQueueCV : public LockedQueueCV<ReadElement> {
+	public:
+		LockedEmptyQueueCV(size_t n) : 
+			LockedQueueCV<ReadElement>() {
+			for (size_t i=0; i<n; i++) {
+				ReadElement tmp;
+				q_.push(tmp);
+			}
+		}
+
+		virtual ~LockedEmptyQueueCV() {
+			//while (!q_.empty()) {
+			//	ReadElement tmp(q_.pop());
+			//}
+		}
+	};
+
+	// write a string with retries, but silently abort on error
+	static void try_write_str(int fd, const char *str) {
+		int len = strlen(str);
+		do {
+			int written = ::write(fd,str,len);
+			if (written<1) {
+				// try once more only
+				written = ::write(fd,str,len);
+			}
+
+			if (written>0) {
+				// get ready for next chunk, if needed
+				len-= written;
+				str+=written;
+			} else {
+				break; // just abort
+			}
+		} while(len>0);
+	}
+
+	// write a string with retries, report any errors
+	// returns false in case of error
+	static bool write_str(int fd, const char *str, const int str_len) {
+		int len = str_len;
+		do {
+			int written = ::write(fd,str,len);
+			if (written<1) {
+				// try once more only
+				written = ::write(fd,str,len);
+			}
+
+			if (written>0) {
+				// get ready for next chunk, if needed
+				len-= written;
+				str+=written;
+			} else {
+				return false;
+			}
+		} while(len>0);
+		return true;
+	}
+
+	static bool write_str(int fd, const char *str) {
+		int len = strlen(str);
+		return write_str(fd, str, len);
+	}
+
+	// read until \n\n detected, discard content
+	// can go over \n\n
+        static void finish_header_read(int fd, char *init_buf, int init_len);
+
+	// read until \n\n detected
+	// can NOT go over \n\n
+	// return true if we read right up to t\n\n
+        static bool read_header(int fd, char *buf, int& buf_len);
+
+	// extract content length from the header string
+	// return -1 if cannot find it
+	static long int find_content_length(const char str[]);
+
+	// look for the terminator request
+	// returns true if it finds one
+	static bool find_request_terminator(const char str[]);
+
+	static constexpr int MAX_HEADER_SIZE = 1023;
+
+	static void close_socket(int fd);
+
+	static bool socketConnect(int fd, struct addrinfo &res, int port);
+	static bool initialHandshake(int fd);
+	static bool parseHeader(int fd, const Config& config);
+
+	// called by contructor, assumes all but fd have been initialized
+	static int fdInit(PatternSourceWebClient *obj);
+
+	// thread procedures
+	static void sendDataWorker(PatternSourceWebClient *obj);
+	static void receiveDataWorker(PatternSourceWebClient *obj);
+
+	const char *server_hostname_;
+	const int server_port_;
+	const Config& config_;
+	OutFileBuf& obuf_;
+
+	LockedEmptyQueueCV psq_empty_;
+	LockedSendQueueCV  psq_send_;
+
+	bool isConnected_;
+	int socket_fd_;
+
+	// these must be last, as it gets the obj as parameter during construction
+	std::thread sendt_; 			// thread sending data
+	std::thread receivet_; 			// thread receiving the data
 };
 
 #ifdef USE_SRA

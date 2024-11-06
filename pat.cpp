@@ -28,6 +28,8 @@
 #include "sstring.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/types.h>
+#include <netdb.h>
 
 #include "pat.h"
 #include "filebuf.h"
@@ -1815,6 +1817,8 @@ bool RawPatternSource::parse(Read& r, Read& rb, TReadId rdid) const {
 
 
 
+// ================== PatternSourceServiceFactory
+
 int PatternSourceServiceFactory::start_listening(int port, int backlog) {
 	const int server_fd = socket(AF_INET, SOCK_STREAM,0);
 	if (server_fd==-1) {
@@ -1930,7 +1934,7 @@ void PatternSourceServiceFactory::finish_header_read(int fd, char *init_buf, int
 // read until \n\n detected
 // can NOT go over \n\n
 // return true if we read right up to t\n\n
-bool PatternSourceServiceFactory::read_header(int fd, char *buf, int& buf_len) {
+inline bool pat_read_header(int fd, int MAX_HEADER_SIZE, char *buf, int& buf_len) {
 	int n_nl = 0; // nr of consecutive \n
 	int len = buf_len;
 	for (int i=0; i<len; i++) {
@@ -1981,6 +1985,10 @@ bool PatternSourceServiceFactory::read_header(int fd, char *buf, int& buf_len) {
 	return false;
 }
 
+bool PatternSourceServiceFactory::read_header(int fd, char *buf, int& buf_len) {
+	return pat_read_header(fd, MAX_HEADER_SIZE, buf, buf_len);
+}
+
 long int PatternSourceServiceFactory::find_content_length(const char str[]) {
 	long int out = -1;
 	const char *cl_str = strstr(str,"\nContent-Length: ");
@@ -2002,13 +2010,27 @@ bool PatternSourceServiceFactory::find_request_terminator(const char str[]) {
 }
 
 // just return the config
-void PatternSourceServiceFactory::reply_config(int fd) {
+bool PatternSourceServiceFactory::reply_config(int fd, bool is_header) {
+	bool noerr = true;
 	// TODO
 	char buf[2048]; // we guarantee that none of the fields will be larger
-	sprintf(buf,"BT2SRV-Version: %s\n",BOWTIE2_VERSION);
-	try_write_str(fd,buf);
-	sprintf(buf,"Index-Name: %s\n",this->index_name_);
-	try_write_str(fd,buf);
+	const char *headstr = "";
+	if (is_header) headstr="X-"; // BT2SRV already in the string
+	sprintf(buf,"%sBT2SRV-Version: %s\n",headstr,BOWTIE2_VERSION);
+	noerr = noerr && write_str(fd,buf);
+	if (is_header) headstr="X-BT2SRV-"; // fully qualify the rest
+	sprintf(buf,"%sIndex-Name: %s\n",headstr,this->config_.index_name);
+	noerr = noerr && write_str(fd,buf);
+	sprintf(buf,"%sSeed-Len: %i\n",headstr,this->config_.seedLen);
+	noerr = noerr && write_str(fd,buf);
+	sprintf(buf,"%sSeed-Rounds: %i\n",headstr,this->config_.seedRounds);
+	noerr = noerr && write_str(fd,buf);
+	sprintf(buf,"%sMax-DP-Streak: %i\n",headstr,this->config_.maxDpStreak);
+	noerr = noerr && write_str(fd,buf);
+	sprintf(buf,"%sKHits: %i\n",headstr,this->config_.khits);
+	noerr = noerr && write_str(fd,buf);
+
+	return noerr;
 }
 
 // this is the real alignment happens
@@ -2098,7 +2120,7 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 			finish_header_read(client_fd, buf, nels);
 			// reply with my details on simple get
 			if (write_str(client_fd,"HTTP/1.0 200 OK\n\n")) {
-				obj->reply_config(client_fd);
+				obj->reply_config(client_fd, false);
 			}
 		} else if ((nels>=4)&&(memcmp(buf,"GET ",4)==0)) {
 			// any other get is invalid
@@ -2117,13 +2139,10 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 				long int data_size = find_content_length(buf);
 				// TODO: negative number OK, means 2xnewline terminated
 				// fprintf(stderr,"PatternSourceServiceFactory::Client> align on %i\n",client_fd);
-				char hwbuf[128];
-				if (term) {
-					sprintf(hwbuf,"HTTP/1.0 200 OK\nX-BT2SRV-Terminator: 1\n\n");
-				} else {
-					sprintf(hwbuf,"HTTP/1.0 200 OK\n\n");
-				}
-				bool noerr = write_str(client_fd,hwbuf);
+				bool noerr = write_str(client_fd, "HTTP/1.0 200 OK\n");
+				if (noerr) noerr = obj->reply_config(client_fd, true);
+				if (noerr && term) noerr = write_str(client_fd, "X-BT2SRV-Terminator: 1\n");
+				if (noerr) noerr = write_str(client_fd, "\n"); // terminate header
 				if (noerr) {
 					// the align method will keep reading the input
 					noerr = obj->align(client_fd, data_size);
@@ -2140,14 +2159,10 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 		} else if ( ((nels>=5)&&(memcmp(buf,"POST ",5)==0)) ||
 			    ((nels>=4)&&(memcmp(buf,"PUT ",4)==0))  ){
 			// any other post or put is invalid
-			//buf[nels] = 0;
-			//fprintf(stderr, "NFO: Received unsupported PUT/POST: '%s'\n", buf);
 			try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
 			// empty input buffer, so the client is not surprised
 			finish_header_read(client_fd, buf, nels);
 		} else {
-			//buf[nels] = '\0';
-			//fprintf(stderr, "INFO: Received unsupported method: '%s'\n",buf);
 			// refuse any other request
 			try_write_str(client_fd,"HTTP/1.0 405 Method Not Allowed\nAllow: GET, POST\n\n");
 			// just drop connecton, we do not know if it is even a valid header
@@ -2175,6 +2190,256 @@ void tooManyQualities(const BTString& read_name) {
 	cerr << "Error: Read " << read_name << " has more quality values than read "
 		 << "characters." << endl;
 	throw 1;
+}
+
+// ================== PatternSourceWebClient
+
+void PatternSourceWebClient::ReadElement::clear_and_alloc(size_t size) {
+	if  (capacity<size) {
+		if (tab6_str!=NULL) delete[] tab6_str;
+		tab6_str = new char[size];
+		capacity = size;
+	} // else, reuse the same buffer
+	len = 0;
+}
+
+void PatternSourceWebClient::ReadElement::append(const char *str, size_t str_len) {
+	assert((len+str_len)<=capacity);
+	memcpy(tab6_str+len,str,str_len);
+	len+=str_len;
+}
+
+void PatternSourceWebClient::ReadElement::append(const char chr) {
+	assert(len<capacity);
+	tab6_str[len] = chr;
+	len++;
+}
+
+// Returns a new string in tab6 format
+// Caller gets ownership of the pointer
+// Note that the returned size does not include the terminating null character
+void PatternSourceWebClient::ReadElement::readPair2Tab6(const Read& read_a, const Read& read_b) {
+	size_t total_len = read_a.name.length()+1+read_a.patFw.length()+1+read_a.qual.length();
+	if (!read_b.empty()) {
+		// paired
+		total_len += 1+read_b.patFw.length()+1+read_b.qual.length();
+	}
+	ReadElement& out = *this;
+	out.clear_and_alloc(total_len+1);
+	out.append(read_a.name.buf(),read_a.name.length());
+	out.append('\t');
+	out.append(read_a.patFw.toZBuf(),read_a.patFw.length());
+	out.append('\t');
+	out.append(read_a.qual.toZBuf(),read_a.qual.length());
+	if (!read_b.empty()) {
+		out.append('\t');
+		out.append(read_b.patFw.toZBuf(),read_b.patFw.length());
+		out.append('\t');
+		out.append(read_b.qual.toZBuf(),read_b.qual.length());
+	}
+	out.append('\0');
+}
+
+// read until \n\n detected
+// can NOT go over \n\n
+// return true if we read right up to t\n\n
+bool PatternSourceWebClient::read_header(int fd, char *buf, int& buf_len) {
+	return pat_read_header(fd, MAX_HEADER_SIZE, buf, buf_len);
+}
+
+bool PatternSourceWebClient::socketConnect(int fd, struct addrinfo &res, int port) {
+	assert(res->ai_family==AF_INET);
+	struct sockaddr_in address;
+	const socklen_t addrlen = sizeof(address);
+	address.sin_family = AF_INET;
+	address.sin_addr = ((struct sockaddr_in *) res.ai_addr)->sin_addr;
+	address.sin_port = htons(port);
+	const int rc = connect(fd, (struct sockaddr*)&address, addrlen);
+	return rc==0;
+}
+
+// send initial request header, and check the reply code
+bool PatternSourceWebClient::initialHandshake(int fd) {
+	// Standard request the server can understand
+	bool success = write_str(fd,"PUT /align HTTP/1.0\nUser-Agent: BT2CLT\nAccept: */*\nX-BT2SRV-Request-Terminator: 1\n\n");
+	if (success) {
+		char buf[16];
+		// we excpect a very well defined reply on success
+		// no need to be fancy (for now)
+		int cnt = ::read(fd, buf, 15);
+		success = ( (cnt==15) && 
+			    (memcmp(buf,"HTTP/1.0 200 OK",15)==0) );
+	}
+	return success;
+}
+
+bool PatternSourceWebClient::parseHeader(int fd, const PatternSourceWebClient::Config& config) {
+	char buf[MAX_HEADER_SIZE+1];
+	int buf_len = 0;
+	// read the remainder of the header into the buffer
+	bool success = read_header(fd, buf, buf_len);
+	buf[buf_len] = 0;
+	if (success) {
+		// we rely on the terminator to detect successful completion
+		// so make sure the server is promising one
+		success = (strstr(buf,"\nX-BT2SRV-Terminator: 1")!=NULL);
+		if (!success) {
+			fprintf(stderr,"ERROR: Server does not appear to be valid BT2SRV\n");
+			//fprintf(stderr,"Header: %s\n",buf);
+		}
+	}
+	// TODO: Do the actual parsing and comparing to the config
+	return success;
+}
+
+// called by contructor, assumes all but fd have been initialized
+int PatternSourceWebClient::fdInit(PatternSourceWebClient *obj) {
+	struct addrinfo hints;
+	bzero(&hints, sizeof(hints));
+	hints.ai_family = AF_INET; // TODO: Consider supporting IPv6, too
+	hints.ai_socktype = SOCK_STREAM;
+	struct addrinfo *res;
+	if (getaddrinfo(obj->server_hostname_, NULL, &hints, &res)!=0) {
+		// host name resolution failed, get out immediatelly
+		obj->isConnected_ = false;
+		return -1;
+	}
+
+	int fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (fd<0) {
+		// this should never happen, but if it does, quit fast
+		freeaddrinfo(res);
+		obj->isConnected_ = false;
+		return -1;
+	}
+	bool success = false;
+	for (struct addrinfo *ires = res; ires!=NULL; ires=ires->ai_next) {
+		success = socketConnect(fd, *ires, obj->server_port_);
+		if (success) break;
+	}
+	freeaddrinfo(res); // we do not need the DNS data anymore
+
+	if (success) {
+		success = initialHandshake(fd);
+	}
+
+	if (success) {
+		success = parseHeader(fd,obj->config_);
+	}
+
+	if (success) {
+		obj->isConnected_ = true;
+	} else {
+		obj->isConnected_ = false;
+		close(fd);
+		fd = -1;
+	}
+	return fd;
+}
+
+// thread procedures
+void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
+	if (!(obj->isConnected_)) return; // initialization failed, exit fast
+	LockedEmptyQueueCV& psq_empty = obj->psq_empty_;
+	LockedSendQueueCV&  psq_send  = obj->psq_send_;
+	int fd = obj->socket_fd_;
+	ReadElement *re_buf = new ReadElement[RE_PER_PACKET];
+	int send_alloc = RE_PER_PACKET*512;
+	char* send_str = new char[send_alloc];
+	bool found_null = false;
+	while (!found_null) {
+		int n_re = 0;
+		psq_send.popUpToN(RE_PER_PACKET, re_buf, n_re);
+		int re_len = 0;
+		for (int i=0; i<n_re; i++) {
+			re_len += re_buf[i].len+1;
+		}
+		if (re_len>send_alloc) {
+			delete[] send_str;
+			send_alloc = re_len;
+			send_str = new char[send_alloc];
+		}
+		re_len = 0;
+		for (int i=0; i<n_re; i++) {
+			if (re_buf[i].empty()) {
+				// finalize() put this in to signal we are done
+				found_null = true;
+			} else {
+				memcpy(send_str+re_len, re_buf[i].buf(), re_buf[i].len);
+				re_len += re_buf[i].len;
+				send_str[re_len] = '\n';
+				re_len += 1;
+			}
+		}
+		if (!found_null) {
+			// we do not need the message bufs anymore, send it back for 
+			psq_empty.pushN(n_re, re_buf);
+		} else {
+			// we just cleanup, no point in sending it back to the empty queue
+			for (int i=0; i<n_re; i++) {
+				re_buf[i].reset();
+			}
+		}
+		send_str[re_len] = 0;
+		bool success = write_str(fd, send_str, re_len);
+		if (!success) {
+			// TODO, do something about the error
+			fprintf(stderr, "WARN: Client Write failed\n");
+		}
+
+	}
+
+	//fprintf(stderr, "Client Write done\n");
+
+	// in order to not lose any buffered data
+	// tell the server the socket is closing
+	// and there will be no more data coming its way
+	shutdown(fd, SHUT_WR);
+
+	delete[] send_str;
+	delete[] re_buf;
+}
+
+void PatternSourceWebClient::receiveDataWorker(PatternSourceWebClient *obj) {
+	if (!(obj->isConnected_)) return; // initialization failed, exit fast
+	OutFileBuf& obuf = obj->obuf_;
+	int fd = obj->socket_fd_;
+	const int recv_alloc = 64*1024; // use a reasonably large buffer
+	char* recv_str = new char[recv_alloc+16]; // need some space for null termination
+	int recv_filled = 0;
+	bool found_end = false;
+	while (!found_end) {
+		int cnt = ::read(fd, recv_str+recv_filled, recv_alloc-recv_filled);
+		if (cnt<1) {
+			// retry once
+			cnt = ::read(fd, recv_str, recv_alloc);
+		}
+		if (cnt>0) {
+			recv_filled+=cnt;
+			constexpr int endlen = 20; // strlen("@CO BT2SRV All Done\n")
+			if (recv_filled>=endlen) {
+				recv_str[recv_filled] = 0;
+				char *end_str = strstr(recv_str,"@CO BT2SRV All Done\n");
+				if (end_str==NULL) {
+					// not finished, just pass through
+					obuf.writeChars(recv_str,recv_filled);
+				} else {
+					found_end = true;
+					// we will ignore anything after the end string
+					if (end_str!=recv_str) { // just avoid emoty strings
+						obj->obuf_.writeChars(recv_str,end_str-recv_str);
+					}
+				}
+				recv_filled = 0;
+			} // else, fill a bit more of the buffer before making a decision
+		} else {
+			// TODO, do something about the error
+		}
+	}
+	// TODO: propagate found_end vs error to the external world
+	delete[] recv_str;
+	close(fd);
+	obj->isConnected_ = false;
 }
 
 #ifdef USE_SRA
