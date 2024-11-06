@@ -4949,6 +4949,12 @@ static void webLoad(
 	OutFileBuf *metricsOfb)
 {
 	multiseed_samOfb          = samOfb;
+	// Note: The client code is currently not thread-safe
+	//       Since most of the work is done on the server, it is not a major limitation
+	// TODO: Allow for proper-multi-threading,
+	//       i.e. multiple socket connections to the server
+	nthreads = 1;
+
 #ifndef _WIN32
 	sigset_t set;
 	sigemptyset(&set);
