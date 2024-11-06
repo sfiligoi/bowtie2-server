@@ -1836,13 +1836,16 @@ createPatsrcFactory(
 #define PTHREAD_ATTRS (PTHREAD_CREATE_JOINABLE | PTHREAD_CREATE_DETACHED)
 
 static PSFactory* multiseed_readahead_factory;
+#ifndef BT2WEBCLIENT
 static Ebwt*                    multiseed_ebwtFw;
 static Ebwt*                    multiseed_ebwtBw;
 static Scoring*                 multiseed_sc;
 static BitPairReference*        multiseed_refs;
 static AlignmentCache*          multiseed_ca; // seed cache
 static AlnSink*                 multiseed_msink;
+#endif
 static OutFileBuf*              multiseed_metricsOfb;
+static OutFileBuf*              multiseed_samOfb;
 
 /**
  * Metrics for measuring the work done by the outer read alignment
@@ -4530,13 +4533,13 @@ static void webLoadWorker(void *vp) {
 	thread_tracking_pair *p = (thread_tracking_pair*) vp;
 	int tid = p->tid;
 	PSFactory& readahead_factory =  *multiseed_readahead_factory;
-	OutFileBuf*             metricsOfb = multiseed_metricsOfb;
+	OutFileBuf*             samOfb = multiseed_samOfb;
 
 	{
 		// we want it slightly larger the internal buffer, but more does not hurt
 		const int n_writecache = 2*PatternSourceWebClient::RE_PER_PACKET;
 		PatternSourceWebClient::Config config("todo"); //TODO
-		PatternSourceWebClient cobj(multiseedServerHostname.c_str(), multiseedServerPort, *metricsOfb, config, n_writecache);
+		PatternSourceWebClient cobj(multiseedServerHostname.c_str(), multiseedServerPort, *samOfb, config, n_writecache);
 		if (!cobj.isConnected()) {
 			fprintf(stderr, "ABORTING: Failed to connect to %s:%i!\n",multiseedServerHostname.c_str(),multiseedServerPort);
 			return;
@@ -4921,12 +4924,12 @@ static void webLoad(
 	const char *server_hostname,
 	const PatternParams& pp,
 	PatternComposer& patsrc,      // pattern source
-	OutFileBuf *ofb,              // output buffer
+	OutFileBuf *samOfb,              // output buffer
 	const char ebwt_basename[],   // logical index name
 	OutFileBuf *metricsOfb)
 {
 	multiseedServerHostname   = server_hostname;
-	multiseed_metricsOfb      = metricsOfb;
+	multiseed_samOfb          = samOfb;
 #ifndef _WIN32
 	sigset_t set;
 	sigemptyset(&set);
