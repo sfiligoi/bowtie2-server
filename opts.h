@@ -163,6 +163,8 @@ enum {
 	ARG_SRA_ACC,                // --sra-acc
         ARG_SAM_APPEND_COMMENT,     // --sam-append-comment
         ARG_SAM_OPT_CONFIG,         // --sam-opt-config
+	ARG_SERVER_HOST,	    // --server-host
+	ARG_SERVER_PORT,	    // --server-port
 };
 
 #endif

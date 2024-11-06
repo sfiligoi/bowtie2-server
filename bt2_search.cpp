@@ -263,7 +263,9 @@ static bool bowtie2p5;
 static string logDps;         // log seed-extend dynamic programming problems
 static string logDpsOpp;      // log mate-search dynamic programming problems
 
+#ifdef BT2WEBCLIENT
 static string multiseedServerHostname;   // Hostname where the alignment server lives
+#endif
 static int    multiseedServerPort;       // Port used by the alignment server
 
 static string bt2index;      // read Bowtie 2 index from files with this prefix
@@ -275,6 +277,44 @@ static EList<string> sra_accs;
 #endif
 
 #define DMAX std::numeric_limits<double>::max()
+
+/**
+ * Parse a T string 'str'.
+ */
+template<typename T>
+T parse(const char *s) {
+	T tmp;
+	stringstream ss(s);
+	ss >> tmp;
+	return tmp;
+}
+
+/**
+ * Parse a pair of Ts from a string, 'str', delimited with 'delim'.
+ */
+template<typename T>
+pair<T, T> parsePair(const char *str, char delim) {
+	string s(str);
+	EList<string> ss;
+	tokenize(s, delim, ss);
+	pair<T, T> ret;
+	ret.first = parse<T>(ss[0].c_str());
+	ret.second = parse<T>(ss[1].c_str());
+	return ret;
+}
+
+/**
+ * Parse a pair of Ts from a string, 'str', delimited with 'delim'.
+ */
+template<typename T>
+void parseTuple(const char *str, char delim, EList<T>& ret) {
+	string s(str);
+	EList<string> ss;
+	tokenize(s, delim, ss);
+	for(size_t i = 0; i < ss.size(); i++) {
+		ret.push_back(parse<T>(ss[i].c_str()));
+	}
+}
 
 static void set_format(int &current_format, file_format format) {
 	if (current_format == UNKNOWN)
@@ -480,8 +520,18 @@ static void resetOptions() {
 	bowtie2p5	    = false;
 	logDps.clear();         // log seed-extend dynamic programming problems
 	logDpsOpp.clear();      // log mate-search dynamic programming problems
-	multiseedServerHostname = "localhost";   // Assume servel lives locally by default
 	multiseedServerPort     = 8080;          // Use standard non-privileged HTTP port by default
+#ifdef BT2WEBCLIENT
+	{
+		const char * env = getenv("BT2CLT_SERVER_PORT");
+		if (env!=NULL) multiseedServerPort = parse<int>(env);
+	}
+	multiseedServerHostname = "localhost";   // Assume servel lives locally by default
+	{
+		const char * env = getenv("BT2CLT_SERVER_HOST");
+		if (env!=NULL) multiseedServerHostname = env;
+	}
+#endif
 #ifdef USE_SRA
 	sra_accs.clear();
 #endif
@@ -620,6 +670,10 @@ static struct option long_options[] = {
 	{(char*)"seedival",                    required_argument,  0,                   'i'},
 	{(char*)"ignore-quals",                no_argument,        0,                   ARG_IGNORE_QUALS},
 	{(char*)"index",                       required_argument,  0,                   'x'},
+#ifdef BT2WEBCLIENT
+	{(char*)"server-host",                 required_argument,  0,                   ARG_SERVER_HOST},
+#endif
+	{(char*)"server-port",                 required_argument,  0,                   ARG_SERVER_PORT},
 	{(char*)"arg-desc",                    no_argument,        0,                   ARG_DESC},
 	{(char*)"wrapper",                     required_argument,  0,                   ARG_WRAPPER},
 	{(char*)"unpaired",                    required_argument,  0,                   'U'},
@@ -950,44 +1004,6 @@ static int parseInt(int lower, int upper, const char *errmsg, const char *arg) {
  */
 static int parseInt(int lower, const char *errmsg, const char *arg) {
 	return parseInt(lower, std::numeric_limits<int>::max(), errmsg, arg);
-}
-
-/**
- * Parse a T string 'str'.
- */
-template<typename T>
-T parse(const char *s) {
-	T tmp;
-	stringstream ss(s);
-	ss >> tmp;
-	return tmp;
-}
-
-/**
- * Parse a pair of Ts from a string, 'str', delimited with 'delim'.
- */
-template<typename T>
-pair<T, T> parsePair(const char *str, char delim) {
-	string s(str);
-	EList<string> ss;
-	tokenize(s, delim, ss);
-	pair<T, T> ret;
-	ret.first = parse<T>(ss[0].c_str());
-	ret.second = parse<T>(ss[1].c_str());
-	return ret;
-}
-
-/**
- * Parse a pair of Ts from a string, 'str', delimited with 'delim'.
- */
-template<typename T>
-void parseTuple(const char *str, char delim, EList<T>& ret) {
-	string s(str);
-	EList<string> ss;
-	tokenize(s, delim, ss);
-	for(size_t i = 0; i < ss.size(); i++) {
-		ret.push_back(parse<T>(ss[i].c_str()));
-	}
 }
 
 static string applyPreset(const string& sorig, Presets& presets) {
@@ -1419,6 +1435,10 @@ static void parseOption(int next_option, const char *arg) {
 	case ARG_1MM_MINLEN:       do1mmMinLen = parse<size_t>(arg); break;
 	case ARG_NOISY_HPOLY: noisyHpolymer = true; break;
 	case 'x': bt2index = arg; break;
+#ifdef BT2WEBCLIENT
+	case ARG_SERVER_HOST: multiseedServerHostname = arg; break;
+#endif
+	case ARG_SERVER_PORT: multiseedServerPort = parse<int>(arg); break;
 	case ARG_PRESET_VERY_FAST_LOCAL: localAlign = true;
 	case ARG_PRESET_VERY_FAST: {
 		presetList.push_back("very-fast%LOCAL%"); break;
@@ -1843,9 +1863,10 @@ static Scoring*                 multiseed_sc;
 static BitPairReference*        multiseed_refs;
 static AlignmentCache*          multiseed_ca; // seed cache
 static AlnSink*                 multiseed_msink;
+#else
+static OutFileBuf*              multiseed_samOfb;
 #endif
 static OutFileBuf*              multiseed_metricsOfb;
-static OutFileBuf*              multiseed_samOfb;
 
 /**
  * Metrics for measuring the work done by the outer read alignment
@@ -4921,14 +4942,12 @@ static void multiseedSearch(
  * enters the reaqest loop.
  */
 static void webLoad(
-	const char *server_hostname,
 	const PatternParams& pp,
 	PatternComposer& patsrc,      // pattern source
 	OutFileBuf *samOfb,              // output buffer
 	const char ebwt_basename[],   // logical index name
 	OutFileBuf *metricsOfb)
 {
-	multiseedServerHostname   = server_hostname;
 	multiseed_samOfb          = samOfb;
 #ifndef _WIN32
 	sigset_t set;
@@ -5387,13 +5406,9 @@ static void client_driver(
 		adjIdxBaseBuf[1023] = '\0';
 		const char *ebwt_basename = basename(adjIdxBaseBuf);
 
-		// TODO: Make them parameters
-		const char *server_hostname = "localhost";
-
 		// Do the search for all input reads
 		assert(patsrc != NULL);
 		webLoad(
-				server_hostname, // server location
 				pp,      // pattern params
 				*patsrc, // pattern source
 				fout,    // output buffer
