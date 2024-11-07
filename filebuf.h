@@ -975,7 +975,8 @@ private:
 			while (asyncData.cur != 0) {
                                 written += fwrite((const void *)(asyncData.buf + written), 1, asyncData.cur, asyncData.out);
 				if (errno == EPIPE) {
-					exit(EXIT_SUCCESS);
+					abort = true;
+					break;
 				}
                                 if (feof(asyncData.out) || written == 0)
                                         break;
@@ -983,6 +984,7 @@ private:
                                 asyncData.cur -= written;
                                 written = 0;
 			}
+			if(abort) break;
 
                         if (written != asyncData.cur) {
                                 // std::cerr << "Error while flushing and closing output" << std::endl;
