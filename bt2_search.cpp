@@ -4556,14 +4556,13 @@ static void webLoadWorker(void *vp) {
 	PSFactory& readahead_factory =  *multiseed_readahead_factory;
 	OutFileBuf*             samOfb = multiseed_samOfb;
 
-	{
+	try {
 		// we want it slightly larger the internal buffer, but more does not hurt
 		const int n_writecache = 2*PatternSourceWebClient::RE_PER_PACKET;
 		PatternSourceWebClient::Config config("todo"); //TODO
 		PatternSourceWebClient cobj(multiseedServerHostname.c_str(), multiseedServerPort, *samOfb, config, n_writecache);
-		if (!cobj.isConnected()) {
-			fprintf(stderr, "ABORTING: Failed to connect to %s:%i!\n",multiseedServerHostname.c_str(),multiseedServerPort);
-			return;
+		if (!cobj.goodState()) {
+			fprintf(stderr, "ERROR: Failed to connect to %s:%i!\n",multiseedServerHostname.c_str(),multiseedServerPort);
 		}
 		RandomSource rnd;
 
@@ -4571,7 +4570,7 @@ static void webLoadWorker(void *vp) {
 		//time_t iTime = time(0);
 
 		bool done = false;
-		while(!done) {
+		while((!done) && cobj.goodState()) {
 	   	   PSFactory::ReadAhead psrah(readahead_factory);
 		   PatternSourcePerThread* const ps = psrah.ptr();
                    do {
@@ -4593,7 +4592,6 @@ static void webLoadWorker(void *vp) {
 				// Align this read/pair
 				if (!cobj.addReadPair(ps->read_a(),ps->read_b())) {
 					done = true;
-					fprintf(stderr, "ABORTING: Connection unexpectedly closed!\n");
 				}
 			} // if(rdid >= skipReads && rdid < qUpto)
 			else if(rdid >= qUpto) {
@@ -4602,7 +4600,11 @@ static void webLoadWorker(void *vp) {
 			}
 		   } while (ps->nextReadPairReady()); // must read the whole cached buffer
 		} // while(true)
-		cobj.finalize();
+		if (!cobj.finalize()) {
+			fprintf(stderr, "ERROR: Did not process all the input file\n");
+		}
+	} catch (...) {
+			fprintf(stderr, "ERROR: Excpetion, did not process all the input file\n");
 	}
 	p->done->fetch_add(1);
 

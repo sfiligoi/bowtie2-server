@@ -2301,6 +2301,7 @@ int PatternSourceWebClient::fdInit(PatternSourceWebClient *obj) {
 	struct addrinfo *res;
 	if (getaddrinfo(obj->server_hostname_, NULL, &hints, &res)!=0) {
 		// host name resolution failed, get out immediatelly
+		obj->hasErrors_ = true;
 		obj->isConnected_ = false;
 		return -1;
 	}
@@ -2309,6 +2310,7 @@ int PatternSourceWebClient::fdInit(PatternSourceWebClient *obj) {
 	if (fd<0) {
 		// this should never happen, but if it does, quit fast
 		freeaddrinfo(res);
+		obj->hasErrors_ = true;
 		obj->isConnected_ = false;
 		return -1;
 	}
@@ -2328,8 +2330,10 @@ int PatternSourceWebClient::fdInit(PatternSourceWebClient *obj) {
 	}
 
 	if (success) {
+		obj->hasErrors_ = false;
 		obj->isConnected_ = true;
 	} else {
+		obj->hasErrors_ = true;
 		obj->isConnected_ = false;
 		close(fd);
 		fd = -1;
@@ -2347,9 +2351,11 @@ void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
 	int send_alloc = RE_PER_PACKET*512;
 	char* send_str = new char[send_alloc];
 	bool found_null = false;
-	while (!found_null) {
+	while ((!found_null) && (obj->goodState())) {
 		int n_re = 0;
 		psq_send.popUpToN(RE_PER_PACKET, re_buf, n_re);
+		if (!obj->goodState()) break; // pop is blocking, things may have changed since last check
+
 		int re_len = 0;
 		for (int i=0; i<n_re; i++) {
 			re_len += re_buf[i].len+1;
@@ -2383,18 +2389,26 @@ void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
 		send_str[re_len] = 0;
 		bool success = write_str(fd, send_str, re_len);
 		if (!success) {
-			// TODO, do something about the error
-			fprintf(stderr, "WARN: Client Write failed\n");
+			obj->hasErrors_ = true;
+			fprintf(stderr, "ERROR: Write to server failed, aborting\n");
 		}
 
 	}
 
-	//fprintf(stderr, "Client Write done\n");
+	//fprintf(stderr, "INFO: Client Write done\n");
 
 	// in order to not lose any buffered data
 	// tell the server the socket is closing
 	// and there will be no more data coming its way
-	shutdown(fd, SHUT_WR);
+	if (obj->isConnected_ && (fd>=0)) shutdown(fd, SHUT_WR);
+
+	if (obj->hasErrors_) {
+		// push elements into the empty  queue, in case anyone was blocked on it before noticing the error state
+		for (int i=0; i<RE_PER_PACKET; i++) {
+			re_buf[i].reset();
+		}
+		psq_empty.pushN(RE_PER_PACKET, re_buf);
+	}
 
 	delete[] send_str;
 	delete[] re_buf;
@@ -2408,12 +2422,15 @@ void PatternSourceWebClient::receiveDataWorker(PatternSourceWebClient *obj) {
 	char* recv_str = new char[recv_alloc+16]; // need some space for null termination
 	int recv_filled = 0;
 	bool found_end = false;
-	while (!found_end) {
+	while ((!found_end) && (obj->goodState())) {
 		int cnt = ::read(fd, recv_str+recv_filled, recv_alloc-recv_filled);
+		if (!obj->goodState()) break; // read is blocking, things may have changed since last check
 		if (cnt<1) {
 			// retry once
 			cnt = ::read(fd, recv_str, recv_alloc);
 		}
+		if (!obj->goodState()) break; // read is blocking, things may have changed since last check
+
 		if (cnt>0) {
 			recv_filled+=cnt;
 			constexpr int endlen = 20; // strlen("@CO BT2SRV All Done\n")
@@ -2433,13 +2450,15 @@ void PatternSourceWebClient::receiveDataWorker(PatternSourceWebClient *obj) {
 				recv_filled = 0;
 			} // else, fill a bit more of the buffer before making a decision
 		} else {
-			// TODO, do something about the error
+			obj->hasErrors_ = true;
+			fprintf(stderr, "ERROR: Read from server failed, aborting\n");
 		}
 	}
-	// TODO: propagate found_end vs error to the external world
+
+	//fprintf(stderr, "INFO: Client Read done\n");
+	//
 	delete[] recv_str;
-	close(fd);
-	obj->isConnected_ = false;
+	if (obj->isConnected_ && (fd>=0)) shutdown(fd, SHUT_RD);
 }
 
 #ifdef USE_SRA

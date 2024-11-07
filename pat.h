@@ -1940,13 +1940,9 @@ public:
 			//if (tab6_str!=NULL) delete[] tab6_str;
 		}
 
-		// due to owned pointer, prevent copying of the object
-		// TODO
-#if 0
-		ReadElement(const ReadElement& other) = delete;
-		ReadElement& operator=(const ReadElement& other) = delete;
+		ReadElement(const ReadElement& other) = default;
+		ReadElement& operator=(const ReadElement& other) = default;
 
-		// but allow the move
 		ReadElement(ReadElement&& other) {
 			tab6_str = other.tab6_str;
 			other.tab6_str = NULL;
@@ -1955,7 +1951,6 @@ public:
 			len = other.len;
 			other.len = 0;
 		}
-#endif
 
 		// fill this buffer with tab6 data from the two reads
 		void readPair2Tab6(const Read& read_a, const Read& read_b);
@@ -1974,6 +1969,7 @@ public:
 		void append(const char chr);
 		void reset() {
 			if (tab6_str!=NULL) delete[] tab6_str;
+			tab6_str = NULL;
 			capacity=0;
 			len=0;
 		}
@@ -2007,26 +2003,33 @@ public:
 		obuf_(obuf),
 		psq_empty_(n_writecache),
 		psq_send_(),
+		hasErrors_(false),
 		isConnected_(false),
 		socket_fd_(fdInit(this)),
 		sendt_(sendDataWorker, this),
 		receivet_(receiveDataWorker, this) {}
 
 	~PatternSourceWebClient() {
-		if (isConnected_) finalize(false);
-		sendt_.join();
-		receivet_.join();
+		finalize(false);
+		if (sendt_.joinable()) sendt_.join();
+		if (receivet_.joinable()) receivet_.join();
+		if (isConnected_ && (socket_fd_>=0)) close(socket_fd_);
 	}
 
 	// will turn false on error
+	bool goodState() const {return isConnected_ && (!hasErrors_);}
+
 	bool isConnected() const {return isConnected_;}
 
 	// will return false on error
 	bool addReadPair(const Read& read_a, const Read& read_b) {
+		if (!goodState()) return false;
 		ReadElement el(psq_empty_.pop());
-		el.readPair2Tab6(read_a,read_b);
-		psq_send_.push(el);
-		return isConnected_;
+		if (goodState()) {
+			el.readPair2Tab6(read_a,read_b);
+			psq_send_.push(el);
+		}
+		return goodState();
 	}
 
 	// Wait for all data to be returned
@@ -2034,8 +2037,11 @@ public:
 	bool finalize(bool patient=true) {
 		ReadElement el;
 		psq_send_.push(el); // this will signal the sendt_ thread to terminate
-		// TODO: wait to make sure it worked
-		return true;
+		if (patient) {
+			// once the receiving thread terminates, we know we are done
+			if (receivet_.joinable()) receivet_.join();
+		}
+		return goodState();
 	}
 
 	static constexpr int RE_PER_PACKET = 40; // can be small-ish, we just need enough for a couple IP packets, and each line is O(100) bytes
@@ -2058,14 +2064,16 @@ private:
 
 		void push(T& ps) {
 			std::unique_lock<std::mutex> lk(m_);
-			q_.push(ps);
+			T my = move(ps); // take ownership of the internal buffers
+			q_.push(my);
 			cv_.notify_all();
 		}
 
 		void pushN(int buf_len, T buf[]) {
 			std::unique_lock<std::mutex> lk(m_);
 			for (int i=0; i<buf_len; i++) {
-				q_.push(buf[i]);
+				T my = move(buf[i]); // take ownership of the internal buffers
+				q_.push(my);
 			}
 			cv_.notify_all();
 		}
@@ -2211,6 +2219,7 @@ private:
 	LockedEmptyQueueCV psq_empty_;
 	LockedSendQueueCV  psq_send_;
 
+	bool hasErrors_;
 	bool isConnected_;
 	int socket_fd_;
 
