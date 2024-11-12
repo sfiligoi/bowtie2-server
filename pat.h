@@ -1790,7 +1790,7 @@ private:
 	// write a string with retries, but silently abort on error
 	static void try_write_str(int fd, const char *str) {
 		int len = strlen(str);
-		do {
+		while(len>0) {
 			int written = ::write(fd,str,len);
 			if (written<1) {
 				// try once more only
@@ -1804,14 +1804,14 @@ private:
 			} else {
 				break; // just abort
 			}
-		} while(len>0);
+		}
 	}
 
 	// write a string with retries, report any errors
 	// returns false in case of error
 	static bool write_str(int fd, const char *str, const int str_len) {
 		int len = str_len;
-		do {
+		while(len>0) {
 			int written = ::write(fd,str,len);
 			if (written<1) {
 				// try once more only
@@ -1825,7 +1825,7 @@ private:
 			} else {
 				return false;
 			}
-		} while(len>0);
+		}
 		return true;
 	}
 	static bool write_str(int fd, const char *str) {
@@ -2137,7 +2137,7 @@ private:
 	// write a string with retries, but silently abort on error
 	static void try_write_str(int fd, const char *str) {
 		int len = strlen(str);
-		do {
+		while(len>0) {
 			int written = ::write(fd,str,len);
 			if (written<1) {
 				// try once more only
@@ -2151,14 +2151,14 @@ private:
 			} else {
 				break; // just abort
 			}
-		} while(len>0);
+		}
 	}
 
 	// write a string with retries, report any errors
 	// returns false in case of error
 	static bool write_str(int fd, const char *str, const int str_len) {
 		int len = str_len;
-		do {
+		while(len>0) {
 			int written = ::write(fd,str,len);
 			if (written<1) {
 				// try once more only
@@ -2172,7 +2172,7 @@ private:
 			} else {
 				return false;
 			}
-		} while(len>0);
+		}
 		return true;
 	}
 
