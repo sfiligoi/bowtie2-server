@@ -5496,7 +5496,8 @@ int bowtie(int argc, const char **argv) {
 				return 1;
 			}
 
-			// Get query filename
+#ifdef BT2WEBCLIENT
+			// Get query filename for the client
 			bool got_reads = !queries.empty() || !mates1.empty() || !mates12.empty();
 #ifdef USE_SRA
 			got_reads = got_reads || !sra_accs.empty();
@@ -5522,7 +5523,7 @@ int bowtie(int argc, const char **argv) {
 				}
 			}
 
-			// Get output filename
+			// Get output filename for the client
 			if(optind < argc && outfile.empty()) {
 				outfile = argv[optind++];
 				cerr << "Warning: Output file '" << outfile.c_str()
@@ -5530,6 +5531,7 @@ int bowtie(int argc, const char **argv) {
 				     << "future Bowtie 2 versions.  Please use -S instead."
 				     << endl;
 			}
+#endif  /* BT2WEBCLIENT */
 
 			// Extra parametesr?
 			if(optind < argc) {
