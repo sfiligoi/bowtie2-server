@@ -4884,6 +4884,7 @@ static void multiseedSearch(
 
 	// Start the metrics thread
 
+	fprintf(stderr, "INFO: Server ready to process\n");
 	std::atomic<int> all_threads_done;
 	all_threads_done = 0;
 	{
