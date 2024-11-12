@@ -267,6 +267,7 @@ static string logDpsOpp;      // log mate-search dynamic programming problems
 static string multiseedServerHostname;   // Hostname where the alignment server lives
 #endif
 static int    multiseedServerPort;       // Port used by the alignment server
+static string multiseedIndexName;        // Logical index name
 
 static string bt2index;      // read Bowtie 2 index from files with this prefix
 static EList<pair<int, string> > extra_opts;
@@ -4559,7 +4560,7 @@ static void webLoadWorker(void *vp) {
 	try {
 		// we want it slightly larger the internal buffer, but more does not hurt
 		const int n_writecache = 2*PatternSourceWebClient::RE_PER_PACKET;
-		PatternSourceWebClient::Config config("todo"); //TODO
+		PatternSourceWebClient::Config config(multiseedIndexName.c_str());
 		PatternSourceWebClient cobj(multiseedServerHostname.c_str(), multiseedServerPort, *samOfb, config, n_writecache);
 		if (!cobj.goodState()) {
 			fprintf(stderr, "ERROR: Failed to connect to %s:%i!\n",multiseedServerHostname.c_str(),multiseedServerPort);
@@ -4800,7 +4801,6 @@ static void multiseedSearch(
 	AlnSinkSam& msink,               // hit sink
 	Ebwt& ebwtFw,                 // index of original text
 	Ebwt* ebwtBw,                 // index of mirror text
-	const char ebwt_basename[],   // logical index name
 	OutFileBuf *metricsOfb)
 {
 	multiseed_msink  = &msink;
@@ -4839,7 +4839,7 @@ static void multiseedSearch(
 #if 0
 	PatternSourceReadAheadFactory readahead_factory(patsrc,pp,4*nthreads+1);
 #else
-	PatternSourceServiceFactory::Config readahead_factory_config(ebwt_basename);
+	PatternSourceServiceFactory::Config readahead_factory_config(multiseedIndexName.c_str());
 	readahead_factory_config.seedLen = multiseedLen;
 	readahead_factory_config.seedRounds = nSeedRounds;
 	readahead_factory_config.maxDpStreak = maxDpStreak;
@@ -4947,7 +4947,6 @@ static void webLoad(
 	const PatternParams& pp,
 	PatternComposer& patsrc,      // pattern source
 	OutFileBuf *samOfb,              // output buffer
-	const char ebwt_basename[],   // logical index name
 	OutFileBuf *metricsOfb)
 {
 	multiseed_samOfb          = samOfb;
@@ -5249,6 +5248,7 @@ static void driver(
 		strncpy(adjIdxBaseBuf,adjIdxBase.c_str(),1023);
 		adjIdxBaseBuf[1023] = '\0';
 		char *ebwt_basename = basename(adjIdxBaseBuf);
+		multiseedIndexName = ebwt_basename;
 
 		// Do the search for all input reads
 		assert(patsrc != NULL);
@@ -5285,7 +5285,6 @@ static void driver(
 				*mssink, // hit sink
 				ebwt,    // BWT
 				&ebwtBw, // BWT'
-				ebwt_basename, // logical BWT name
 				metricsOfb);
                 } else {
 			multiseedSearch(
@@ -5295,7 +5294,6 @@ static void driver(
 				*mssink, // hit sink
 				ebwt,    // BWT
 				NULL,    // BWT'
-				ebwt_basename, // logical BWT name
 				metricsOfb);
 		}
 
@@ -5411,6 +5409,7 @@ static void client_driver(
 		strncpy(bt2indexBuf,bt2index.c_str(),1023);
 		bt2indexBuf[1023] = '\0';
 		const char *ebwt_basename = basename(bt2indexBuf);
+		multiseedIndexName = ebwt_basename;
 
 		// Do the search for all input reads
 		assert(patsrc != NULL);
@@ -5418,7 +5417,6 @@ static void client_driver(
 				pp,      // pattern params
 				*patsrc, // pattern source
 				fout,    // output buffer
-				ebwt_basename, // logical BWT name
 				metricsOfb);
 
 

@@ -1704,6 +1704,7 @@ public:
 		config_(config),
 		pp_(pp),
 		template_msink_(msink),
+		base_url_(string("/BT2SRV/")+config.index_name),
 		psfact_(composer,pp),
 		n_readahead_(n_readahead),
 		psq_ready_(),
@@ -1832,14 +1833,13 @@ private:
 		return write_str(fd, str, len);
 	}
 
-	// read until \n\n detected, discard content
-	// can go over \n\n
-        static void finish_header_read(int fd, char *init_buf, int init_len);
-
 	// read until \n\n detected
 	// can NOT go over \n\n
 	// return true if we read right up to t\n\n
         static bool read_header(int fd, char *buf, int& buf_len);
+
+	bool is_legit_align_header(char buf[], int nels);
+	bool is_legit_config_header(char buf[], int nels);
 
 	// extract content length from the header string
 	// return -1 if cannot find it
@@ -1912,6 +1912,8 @@ private:
 	const Config& config_;
 	const PatternParams& pp_;
 	AlnSinkSam& template_msink_;
+
+	const std::string base_url_;
 
 	std::mutex m_;
 	PatternSourcePerThreadFactory psfact_;
@@ -2201,7 +2203,7 @@ private:
 	static void close_socket(int fd);
 
 	static bool socketConnect(int fd, struct addrinfo &res, int port);
-	static bool initialHandshake(int fd);
+	static bool initialHandshake(int fd, const Config& config);
 	static bool parseHeader(int fd, const Config& config);
 
 	// called by contructor, assumes all but fd have been initialized

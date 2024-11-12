@@ -1894,43 +1894,6 @@ void PatternSourceServiceFactory::acceptConnections(PatternSourceServiceFactory 
 	fprintf(stderr,"INFO: Server stopped\n");
 }
 
-// read until \n\n detected, discard content
-// can go over \n\n
-void PatternSourceServiceFactory::finish_header_read(int fd, char *init_buf, int init_len) {
-	int n_nl = 0; // nr of consecutive \n
-	for (int i=0; i<init_len; i++) {
-		if (init_buf[i]=='\r') {
-			// ignore... likely \r\n
-		} else if (init_buf[i]=='\n') {
-			n_nl++; // here is one
-		} else {
-			n_nl = 0; // nope, start counting from the beginning
-		}
-		if (n_nl==2) return; // found them all
-	}
-	// not found in initial buf, keep reading
-	char buf[68]; // I expect the data to be small
-	while (true) {
-		int nels = ::read(fd, buf, 64);
-		if (nels<1) {
-			// try once more only
-			nels = ::read(fd, buf, 64);
-		}
-		if (nels<1) return; // EOF or unrecoverable error
-		for (int i=0; i<nels; i++) {
-			if (buf[i]=='\r') {
-				// ignore... likely \r\n
-			} else if (buf[i]=='\n') {
-				n_nl++; // here is one
-			} else {
-				n_nl = 0; // nope, start counting from the beginning
-			}
-			if (n_nl==2) return; // found them all
-		}
-		// else, keep reading
-	}
-}
-
 // read until \n\n detected
 // can NOT go over \n\n
 // return true if we read right up to t\n\n
@@ -2107,34 +2070,72 @@ bool PatternSourceServiceFactory::align(int fd, long int data_size) {
    return true; // no errors, we completed just fine
 }
 
+bool PatternSourceServiceFactory::is_legit_align_header(char buf[], int nels) {
+	assert(nels>=10);
+	char *url_start = NULL;
+	int url_nels = nels;
+	if (memcmp(buf,"POST /",6)==0) {
+		url_start = buf+5;
+		url_nels-=5;
+	} else if (memcmp(buf,"PUT /",5)==0) {
+                url_start = buf+4;
+		url_nels-=4;
+	} else {
+		return false; // only PUT and POST could be an align
+	}
+	bool valid_url = false;
+	if (url_nels>=(int(base_url_.length())+11)) {
+		if (memcmp(url_start,base_url_.c_str(),base_url_.length())==0) {
+			char *cmd_start = url_start+base_url_.length();
+			if (memcmp(cmd_start,"/align HTTP",11)==0) {
+				valid_url = true;
+			}
+		}
+	}
+	return valid_url;
+}
+
+bool PatternSourceServiceFactory::is_legit_config_header(char buf[], int nels) {
+	assert(nels>=10);
+	char *url_start = NULL;
+	int url_nels = nels;
+	if (memcmp(buf,"GET /",5)==0) {
+                url_start = buf+4;
+		url_nels-=4;
+	} else {
+		return false; // only GET could be a config
+	}
+	bool valid_url = false;
+	if ((url_nels>=12) && (memcmp(url_start,"/config HTTP",12)==0)) {
+		// basic version, still acceptable
+		valid_url = true;
+	} else if (url_nels>=(int(base_url_.length())+12)) {
+		if (memcmp(url_start,base_url_.c_str(),base_url_.length())==0) {
+			char *cmd_start = url_start+base_url_.length();
+			if (memcmp(cmd_start,"/config HTTP",12)==0) {
+				// full url
+				valid_url = true;
+			}
+		}
+	}
+	return valid_url;
+}
+
 void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *obj, int client_fd) {
 	{
 		char buf[MAX_HEADER_SIZE+1]; // +1, so we can null terminate
-		// we just need the header at this point
-		int nels = ::read(client_fd, buf, 20); // do not read past the align header end
-		if ((nels>=10)&&(memcmp(buf,"GET / HTTP",10)==0)) {
-			finish_header_read(client_fd, buf, nels);
-			// Just tell them who we are
-			try_write_str(client_fd,"HTTP/1.0 200 OK\n\nbowtie2 SaaS\n");
-		} else if ((nels>=16)&&(memcmp(buf,"GET /config HTTP",16)==0)) {
-			finish_header_read(client_fd, buf, nels);
-			// reply with my details on simple get
-			if (write_str(client_fd,"HTTP/1.0 200 OK\n\n")) {
-				obj->reply_config(client_fd, false);
-			}
-		} else if ((nels>=4)&&(memcmp(buf,"GET ",4)==0)) {
-			// any other get is invalid
-			//buf[nels] = 0;
-			//fprintf(stderr, "===%s===\n", buf);
+		int nels = 0;
+		if (!read_header(client_fd, buf, nels)) {
+			// something got terribly wrong, still try to notify the caller
 			try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
-			// empty input buffer, so the client is not surprised
-			finish_header_read(client_fd, buf, nels);
-		} else if ( ((nels>=16)&&(memcmp(buf,"POST /align HTTP",16)==0)) ||
-			    ((nels>=15)&&(memcmp(buf,"PUT /align HTTP",15)==0)) ) {
-			// request for alignment
-			// read the remaining header, so client_fd it is ready for the payload
-			if (read_header(client_fd, buf, nels)) {
-				buf[nels] = '\0'; // null terminate, so now it is actually a string
+		} else if (nels<10) {
+			// no legitimate header is that short, still try to notify the caller
+			try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
+		} else {
+			assert(nels>=10);
+			buf[nels] = 0; // null terminate, so it is safe to use string search
+			if ( obj->is_legit_align_header(buf,nels) ) {
+				// request for alignment
 				bool term = find_request_terminator(buf);
 				long int data_size = find_content_length(buf);
 				// TODO: negative number OK, means 2xnewline terminated
@@ -2152,20 +2153,24 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 				}
 				// fprintf(stderr,"PatternSourceServiceFactory::Client> end align on %i\n",client_fd);
 				// if initial write failed, just abort
-			} else {
-				// something went wrong in parsing the header, try to notify sender
+			} else if ( obj->is_legit_config_header(buf,nels) ) {
+				// reply with my details on simple get
+				if (write_str(client_fd,"HTTP/1.0 200 OK\n\n")) {
+					obj->reply_config(client_fd, false);
+				}
+			} else if (memcmp(buf,"GET / HTTP",10)==0) {
+				// Just tell them who we are
+				try_write_str(client_fd,"HTTP/1.0 200 OK\n\nbowtie2 SaaS\n");
+			} else if ( (memcmp(buf,"GET ",4)==0)  ||
+				    (memcmp(buf,"POST ",5)==0) ||
+				    (memcmp(buf,"PUT ",4)==0) ){
+				// any other get, post or put is invalid
 				try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
+			} else {
+				// refuse any other request
+				try_write_str(client_fd,"HTTP/1.0 405 Method Not Allowed\nAllow: GET, POST, PUT\n\n");
+				// just drop connecton, we do not know if it is even a valid header
 			}
-		} else if ( ((nels>=5)&&(memcmp(buf,"POST ",5)==0)) ||
-			    ((nels>=4)&&(memcmp(buf,"PUT ",4)==0))  ){
-			// any other post or put is invalid
-			try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
-			// empty input buffer, so the client is not surprised
-			finish_header_read(client_fd, buf, nels);
-		} else {
-			// refuse any other request
-			try_write_str(client_fd,"HTTP/1.0 405 Method Not Allowed\nAllow: GET, POST\n\n");
-			// just drop connecton, we do not know if it is even a valid header
 		}
 	}
 
@@ -2259,9 +2264,12 @@ bool PatternSourceWebClient::socketConnect(int fd, struct addrinfo &res, int por
 }
 
 // send initial request header, and check the reply code
-bool PatternSourceWebClient::initialHandshake(int fd) {
+bool PatternSourceWebClient::initialHandshake(int fd, const Config& config) {
 	// Standard request the server can understand
-	bool success = write_str(fd,"PUT /align HTTP/1.0\nUser-Agent: BT2CLT\nAccept: */*\nX-BT2SRV-Request-Terminator: 1\n\n");
+	std::string send("PUT /BT2SRV/");
+	send+=config.index_name;
+	send+="/align HTTP/1.0\nUser-Agent: BT2CLT\nAccept: */*\nX-BT2SRV-Request-Terminator: 1\n\n";
+	bool success = write_str(fd,send.c_str());
 	if (success) {
 		char buf[16];
 		// we excpect a very well defined reply on success
@@ -2322,7 +2330,7 @@ int PatternSourceWebClient::fdInit(PatternSourceWebClient *obj) {
 	freeaddrinfo(res); // we do not need the DNS data anymore
 
 	if (success) {
-		success = initialHandshake(fd);
+		success = initialHandshake(fd,obj->config_);
 	}
 
 	if (success) {
