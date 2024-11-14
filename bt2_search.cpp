@@ -269,6 +269,8 @@ static string multiseedServerHostname;   // Hostname where the alignment server 
 static int    multiseedServerPort;       // Port used by the alignment server
 static string multiseedIndexName;        // Logical index name
 
+static std::atomic<bool> multiseed_success;
+
 static string bt2index;      // read Bowtie 2 index from files with this prefix
 static EList<pair<int, string> > extra_opts;
 static size_t extra_opts_cur;
@@ -4603,9 +4605,11 @@ static void webLoadWorker(void *vp) {
 		} // while(true)
 		if (!cobj.finalize()) {
 			fprintf(stderr, "ERROR: Did not process all the input file\n");
+			multiseed_success = false;
 		}
 	} catch (...) {
 			fprintf(stderr, "ERROR: Excpetion, did not process all the input file\n");
+			multiseed_success = false;
 	}
 	p->done->fetch_add(1);
 
@@ -5571,6 +5575,7 @@ int bowtie(int argc, const char **argv) {
 				cout << "Press key to continue..." << endl;
 				getchar();
 			}
+			multiseed_success = true;
 #ifndef BT2WEBCLIENT
 			driver<SString<char> >("DNA", bt2index, outfile);
 #else
@@ -5582,7 +5587,7 @@ int bowtie(int argc, const char **argv) {
     		//tracker.observe( false );
     		pinner.observe( false );
 #endif
-		return 0;
+		return multiseed_success ? 0 : 1;
 	} catch(std::exception& e) {
 		cerr << "Error: Encountered exception: '" << e.what() << "'" << endl;
 		cerr << "Command: ";
