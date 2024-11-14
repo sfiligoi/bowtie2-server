@@ -2071,7 +2071,7 @@ bool PatternSourceServiceFactory::align(int fd, long int data_size) {
 }
 
 bool PatternSourceServiceFactory::is_legit_align_header(char buf[], int nels) {
-	assert(nels>=10);
+	assert(nels>=14);
 	char *url_start = NULL;
 	int url_nels = nels;
 	if (memcmp(buf,"POST /",6)==0) {
@@ -2084,10 +2084,10 @@ bool PatternSourceServiceFactory::is_legit_align_header(char buf[], int nels) {
 		return false; // only PUT and POST could be an align
 	}
 	bool valid_url = false;
-	if (url_nels>=(int(base_url_.length())+11)) {
+	if (url_nels>=(int(base_url_.length())+15)) {
 		if (memcmp(url_start,base_url_.c_str(),base_url_.length())==0) {
 			char *cmd_start = url_start+base_url_.length();
-			if (memcmp(cmd_start,"/align HTTP",11)==0) {
+			if (memcmp(cmd_start,"/align HTTP/1.1",15)==0) {
 				valid_url = true;
 			}
 		}
@@ -2096,7 +2096,7 @@ bool PatternSourceServiceFactory::is_legit_align_header(char buf[], int nels) {
 }
 
 bool PatternSourceServiceFactory::is_legit_config_header(char buf[], int nels) {
-	assert(nels>=10);
+	assert(nels>=14);
 	char *url_start = NULL;
 	int url_nels = nels;
 	if (memcmp(buf,"GET /",5)==0) {
@@ -2106,13 +2106,13 @@ bool PatternSourceServiceFactory::is_legit_config_header(char buf[], int nels) {
 		return false; // only GET could be a config
 	}
 	bool valid_url = false;
-	if ((url_nels>=12) && (memcmp(url_start,"/config HTTP",12)==0)) {
+	if ((url_nels>=16) && (memcmp(url_start,"/config HTTP/1.1",16)==0)) {
 		// basic version, still acceptable
 		valid_url = true;
-	} else if (url_nels>=(int(base_url_.length())+12)) {
+	} else if (url_nels>=(int(base_url_.length())+16)) {
 		if (memcmp(url_start,base_url_.c_str(),base_url_.length())==0) {
 			char *cmd_start = url_start+base_url_.length();
-			if (memcmp(cmd_start,"/config HTTP",12)==0) {
+			if (memcmp(cmd_start,"/config HTTP/1.1",16)==0) {
 				// full url
 				valid_url = true;
 			}
@@ -2127,12 +2127,12 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 		int nels = 0;
 		if (!read_header(client_fd, buf, nels)) {
 			// something got terribly wrong, still try to notify the caller
-			try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
-		} else if (nels<10) {
+			try_write_str(client_fd,"HTTP/1.1 400 Bad Request\n\n");
+		} else if (nels<14) {
 			// no legitimate header is that short, still try to notify the caller
-			try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
+			try_write_str(client_fd,"HTTP/1.1 400 Bad Request\n\n");
 		} else {
-			assert(nels>=10);
+			assert(nels>=14);
 			buf[nels] = 0; // null terminate, so it is safe to use string search
 			if ( obj->is_legit_align_header(buf,nels) ) {
 				// request for alignment
@@ -2140,7 +2140,7 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 				long int data_size = find_content_length(buf);
 				// TODO: negative number OK, means 2xnewline terminated
 				// fprintf(stderr,"PatternSourceServiceFactory::Client> align on %i\n",client_fd);
-				bool noerr = write_str(client_fd, "HTTP/1.0 200 OK\n");
+				bool noerr = write_str(client_fd, "HTTP/1.1 200 OK\n");
 				if (noerr) noerr = obj->reply_config(client_fd, true);
 				if (noerr && term) noerr = write_str(client_fd, "X-BT2SRV-Terminator: 1\n");
 				if (noerr) noerr = write_str(client_fd, "\n"); // terminate header
@@ -2155,20 +2155,20 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 				// if initial write failed, just abort
 			} else if ( obj->is_legit_config_header(buf,nels) ) {
 				// reply with my details on simple get
-				if (write_str(client_fd,"HTTP/1.0 200 OK\n\n")) {
+				if (write_str(client_fd,"HTTP/1.1 200 OK\n\n")) {
 					obj->reply_config(client_fd, false);
 				}
-			} else if (memcmp(buf,"GET / HTTP",10)==0) {
+			} else if (memcmp(buf,"GET / HTTP/1.1",14)==0) {
 				// Just tell them who we are
-				try_write_str(client_fd,"HTTP/1.0 200 OK\n\nbowtie2 SaaS\n");
+				try_write_str(client_fd,"HTTP/1.1 200 OK\n\nbowtie2 SaaS\n");
 			} else if ( (memcmp(buf,"GET ",4)==0)  ||
 				    (memcmp(buf,"POST ",5)==0) ||
 				    (memcmp(buf,"PUT ",4)==0) ){
 				// any other get, post or put is invalid
-				try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
+				try_write_str(client_fd,"HTTP/1.1 400 Bad Request\n\n");
 			} else {
 				// refuse any other request
-				try_write_str(client_fd,"HTTP/1.0 405 Method Not Allowed\nAllow: GET, POST, PUT\n\n");
+				try_write_str(client_fd,"HTTP/1.1 405 Method Not Allowed\nAllow: GET, POST, PUT\n\n");
 				// just drop connecton, we do not know if it is even a valid header
 			}
 		}
@@ -2268,7 +2268,7 @@ bool PatternSourceWebClient::initialHandshake(int fd, const Config& config) {
 	// Standard request the server can understand
 	std::string send("PUT /BT2SRV/");
 	send+=config.index_name;
-	send+="/align HTTP/1.0\nUser-Agent: BT2CLT\nAccept: */*\nX-BT2SRV-Request-Terminator: 1\n\n";
+	send+="/align HTTP/1.1\nUser-Agent: BT2CLT\nAccept: */*\nX-BT2SRV-Request-Terminator: 1\n\n";
 	bool success = write_str(fd,send.c_str());
 	if (success) {
 		char buf[16];
@@ -2276,7 +2276,7 @@ bool PatternSourceWebClient::initialHandshake(int fd, const Config& config) {
 		// no need to be fancy (for now)
 		int cnt = ::read(fd, buf, 15);
 		success = ( (cnt==15) && 
-			    (memcmp(buf,"HTTP/1.0 200 OK",15)==0) );
+			    (memcmp(buf,"HTTP/1.1 200 OK",15)==0) );
 	}
 	return success;
 }
