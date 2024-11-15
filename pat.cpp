@@ -2140,10 +2140,10 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 		int nels = 0;
 		if (!read_header(client_fd, buf, nels)) {
 			// something got terribly wrong, still try to notify the caller
-			try_write_str(client_fd,"HTTP/1.1 400 Bad Request\n\n");
+			try_write_str(client_fd,"HTTP/1.1 400 Bad Request\nConnection: close\n\n");
 		} else if (nels<14) {
 			// no legitimate header is that short, still try to notify the caller
-			try_write_str(client_fd,"HTTP/1.1 400 Bad Request\n\n");
+			try_write_str(client_fd,"HTTP/1.1 400 Bad Request\nConnection: close\n\n");
 		} else {
 			assert(nels>=14);
 			buf[nels] = 0; // null terminate, so it is safe to use string search
@@ -2155,9 +2155,9 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 				if (data_size<0) {
 					noerr = find_chunked_encoding(buf);
 					// if no content_length, then it must be chunk encoded
-					if (!noerr) try_write_str(client_fd, "HTTP/1.1 400 Bad Request\n\n");
+					if (!noerr) try_write_str(client_fd, "HTTP/1.1 400 Bad Request\nConnection: close\n\n");
 				}
-				if (noerr) noerr = write_str(client_fd, "HTTP/1.1 200 OK\n");
+				if (noerr) noerr = write_str(client_fd, "HTTP/1.1 200 OK\nConnection: close\n");
 				if (noerr) noerr = obj->reply_config(client_fd, true);
 				if (noerr && term) noerr = write_str(client_fd, "X-BT2SRV-Terminator: 1\n");
 				if (noerr) noerr = write_str(client_fd, "\n"); // terminate header
@@ -2172,20 +2172,20 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 				// if initial write failed, just abort
 			} else if ( obj->is_legit_config_header(buf,nels) ) {
 				// reply with my details on simple get
-				if (write_str(client_fd,"HTTP/1.1 200 OK\n\n")) {
+				if (write_str(client_fd,"HTTP/1.1 200 OK\nConnection: close\n\n")) {
 					obj->reply_config(client_fd, false);
 				}
 			} else if (memcmp(buf,"GET / HTTP/1.1",14)==0) {
 				// Just tell them who we are
-				try_write_str(client_fd,"HTTP/1.1 200 OK\n\nbowtie2 SaaS\n");
+				try_write_str(client_fd,"HTTP/1.1 200 OK\nConnection: close\n\nbowtie2 SaaS\n");
 			} else if ( (memcmp(buf,"GET ",4)==0)  ||
 				    (memcmp(buf,"POST ",5)==0) ||
 				    (memcmp(buf,"PUT ",4)==0) ){
 				// any other get, post or put is invalid
-				try_write_str(client_fd,"HTTP/1.1 400 Bad Request\n\n");
+				try_write_str(client_fd,"HTTP/1.1 400 Bad Request\nConnection: close\n\n");
 			} else {
 				// refuse any other request
-				try_write_str(client_fd,"HTTP/1.1 405 Method Not Allowed\nAllow: GET, POST, PUT\n\n");
+				try_write_str(client_fd,"HTTP/1.1 405 Method Not Allowed\nAllow: GET, POST, PUT\nConnection: close\n\n");
 				// just drop connecton, we do not know if it is even a valid header
 			}
 		}
