@@ -1972,6 +1972,16 @@ bool PatternSourceServiceFactory::find_request_terminator(const char str[]) {
 	return ibool>0; // may get more fancy in the future, but !=0 good enough for now
 }
 
+bool PatternSourceServiceFactory::find_chunked_encoding(const char str[]) {
+	bool found = false;
+	const char *cl_str = strstr(str,"\nTransfer-Encoding: ");
+	if (cl_str!=NULL) {
+		cl_str = strstr(cl_str,"chunked"); // not fool proof, but works for most common use cases
+		found = (cl_str!=NULL);
+	}
+	return found;
+}
+
 // just return the config
 bool PatternSourceServiceFactory::reply_config(int fd, bool is_header) {
 	bool noerr = true;
@@ -2135,12 +2145,16 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 			assert(nels>=14);
 			buf[nels] = 0; // null terminate, so it is safe to use string search
 			if ( obj->is_legit_align_header(buf,nels) ) {
+				bool noerr = true;
 				// request for alignment
 				bool term = find_request_terminator(buf);
 				long int data_size = find_content_length(buf);
-				// TODO: negative number OK, means 2xnewline terminated
-				// fprintf(stderr,"PatternSourceServiceFactory::Client> align on %i\n",client_fd);
-				bool noerr = write_str(client_fd, "HTTP/1.1 200 OK\n");
+				if (data_size<0) {
+					noerr = find_chunked_encoding(buf);
+					// if no content_length, then it must be chunk encoded
+					if (!noerr) try_write_str(client_fd, "HTTP/1.1 400 Bad Request\n\n");
+				}
+				if (noerr) noerr = write_str(client_fd, "HTTP/1.1 200 OK\n");
 				if (noerr) noerr = obj->reply_config(client_fd, true);
 				if (noerr && term) noerr = write_str(client_fd, "X-BT2SRV-Terminator: 1\n");
 				if (noerr) noerr = write_str(client_fd, "\n"); // terminate header
