@@ -1955,6 +1955,7 @@ bool PatternSourceServiceFactory::read_header(int fd, char *buf, int& buf_len) {
 long int PatternSourceServiceFactory::find_content_length(const char str[]) {
 	long int out = -1;
 	const char *cl_str = strstr(str,"\nContent-Length: ");
+	if (cl_str==NULL) cl_str = strstr(str,"\ncontent-length: ");
 	if (cl_str!=NULL) {
 		int cnt = sscanf(cl_str+17, "%li ", &out);
 		if (cnt!=1) out = -1; // -1 means we did not get the value
@@ -1965,6 +1966,7 @@ long int PatternSourceServiceFactory::find_content_length(const char str[]) {
 bool PatternSourceServiceFactory::find_request_terminator(const char str[]) {
 	int ibool = 0;
 	const char *cl_str = strstr(str,"\nX-BT2SRV-Request-Terminator: ");
+	if (cl_str==NULL) cl_str = strstr(str,"\nx-bt2srv-request-terminator: ");
 	if (cl_str!=NULL) {
 		int cnt = sscanf(cl_str+30, "%i ", &ibool);
 		if (cnt!=1) ibool = 0;
@@ -1975,8 +1977,9 @@ bool PatternSourceServiceFactory::find_request_terminator(const char str[]) {
 bool PatternSourceServiceFactory::find_chunked_encoding(const char str[]) {
 	bool found = false;
 	const char *cl_str = strstr(str,"\nTransfer-Encoding: ");
+	if (cl_str==NULL) cl_str = strstr(str,"\ntransfer-encoding: ");
 	if (cl_str!=NULL) {
-		cl_str = strstr(cl_str,"chunked"); // not fool proof, but works for most common use cases
+		cl_str = strstr(cl_str+20,"chunked"); // not fool proof, but works for most common use cases
 		found = (cl_str!=NULL);
 	}
 	return found;
