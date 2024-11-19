@@ -4839,9 +4839,15 @@ static void multiseedSearch(
 	EList<int> tids;
 	EList<std::thread*> threads(nthreads);
 	EList<thread_tracking_pair> tps;
-	// Important: Need at least nthreads+1 elements, more is OK
 #if 0
-	PatternSourceReadAheadFactory readahead_factory(patsrc,pp,4*nthreads+1);
+	// The condition_variable synchronization can be problematic
+	// in certain situations.
+	// Disabling it and using the polling-based lock-free mechanism can help there
+	// The (relative) polling cost is much higher for low thread count, so use that as a treshold
+	bool readahead_useCVLocks = nthreads<=16; // Note: We may want to consider other factors, too
+
+	// Important: Need at least nthreads+1 elements, more is OK
+	PatternSourceReadAheadFactory readahead_factory(patsrc,pp,4*nthreads+1,readahead_useCVLocks);
 #else
 	PatternSourceServiceFactory::Config readahead_factory_config(multiseedIndexName.c_str());
 	readahead_factory_config.seedLen = multiseedLen;
@@ -4849,6 +4855,7 @@ static void multiseedSearch(
 	readahead_factory_config.maxDpStreak = maxDpStreak;
 	readahead_factory_config.khits = allHits ? -1 : khits;
 
+	// Important: Need at least nthreads+1 elements, more is OK
 	PatternSourceServiceFactory readahead_factory(multiseedServerPort, patsrc,pp,4*nthreads+1, msink, readahead_factory_config);
 #endif
 	multiseed_readahead_factory = &readahead_factory;
