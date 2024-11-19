@@ -586,18 +586,30 @@ public:
 		read_fd_(dup(fd)),
 		max_bytes_(max_bytes),
 		bytes_read(0),
+		buf_allocated(0),
 		msink_(msink),
-		fp_(NULL)
+		fp_(NULL),
+		buf_(NULL)
 		//zfp_(NULL),
 	{
 		// TODO: Consider support for compression
 		fp_ = fdopen(read_fd_, "rb");
+		if (max_bytes<0) {
+			// use chunked logic, pre-allocate small-ish buffer
+			buf_=(char*) malloc(30000);
+			buf_allocated = 30000;
+			max_bytes_ = 0; // declare a new buffer need to be read
+		}
 	}
 
 	/**
 	 * Close open file.
 	 */
 	virtual ~SocketPatternSource() {
+		if (buf_!=NULL) {
+			free(buf_);
+			buf_ = NULL;
+		}
 		if (fp_!=NULL) {
 			fclose(fp_);
 			fp_ = NULL;
@@ -629,7 +641,22 @@ protected:
 		bool batch_a,
 		unsigned read_idx) = 0;
 
-	int getc_wrapper() {
+	// get next element from the buffer
+	// assume whole line is in the buffer (no carry overs)
+	int getc_buffer_wrapper() {
+		int c;
+
+		do {
+			if ((max_bytes_>=0) && (bytes_read>=max_bytes_)) return EOF; // already read everythign there was to read
+			c = buf_[bytes_read];
+			if (c!=EOF) bytes_read++;
+		} while (c != EOF && c != '\t' && c != '\r' && c != '\n' && !isprint(c));
+
+		return c;
+	}
+
+	// read straight from fp
+	int getc_fp_wrapper() {
 		int c;
 
 		do {
@@ -641,11 +668,98 @@ protected:
 		return c;
 	}
 
+	// assuming chunked transfer, read the hex header len
+	// Return -1 on error
+	long int read_buf_len() {
+		char head[8];
+		int hlen=0;
+		int c = getc_unlocked(fp_);
+		if (!isxdigit(c)) return -1; // the first char must be a hex number
+		head[hlen] = c;
+		hlen++;
+		while (hlen<8) {
+			c = getc_unlocked(fp_);
+			if (c=='\r') continue; // ignore
+			if (c=='\n') {
+				// found separator, return the content of the buffer
+				head[hlen] = 0; // make it a proper string
+				return strtol(head,NULL,16);
+			}
+			if (!isxdigit(c)) return -1; // else, only hex numbers allowed
+			head[hlen] = c;
+			hlen++;
+		}
+		// fprintf(stderr,"WARN: Client sent too big of a chunk\n");
+		return -1; // if we got here, the counter was too high
+	}
+
+	void next_buffer_chunk() {
+		bytes_read = 0;
+		// read the length
+		long int len = read_buf_len();
+		// fprintf(stderr, "Buf len: %i\n",int(len));
+		// avoid very large buffers, too
+		if ((len<0) || (len>999999)) { // len==0 means end of data, so treat same as error (TODO: improve)
+			fprintf(stderr,"WARN: Chunk too large, aborting request!\n");
+			// we know the buffer is at least one by long
+			buf_[0] = EOF;
+			max_bytes_ = 1;
+			return;
+		}
+		// make sure we have enough space
+		if (len>buf_allocated) {
+			buf_ = (char*) realloc(buf_, len);
+			buf_allocated = len;
+		}
+		// read in the buffer content
+		for (long int i=0; i<len; i++) {
+			int c = getc_unlocked(fp_);
+			if (c==EOF) {
+				fprintf(stderr,"WARN: Unexpected EOF found!\n");
+				// something went wrong, throw away the whole buffer (TODO: improve)
+				buf_[0] = EOF;
+				max_bytes_ = 1;
+				return;
+			}
+			buf_[i] = c;
+		}
+		// read and discard the final separator
+		{
+			int c = getc_unlocked(fp_);
+			if (c=='\r') c = getc_unlocked(fp_); // \r is optional
+			if (c!='\n') {
+				fprintf(stderr,"WARN: Invalid chunked termnation, aborting request\n");
+				// something went wrong, throw away the whole buffer (TODO: improve)
+				buf_[0] = EOF;
+				max_bytes_ = 1;
+				return;
+			}
+		}
+
+		if (len>0) {
+			max_bytes_ = len;
+		} else {
+			// len==0 is special, it means this is the last chunk
+			buf_[0] = EOF;
+			max_bytes_ = 1;
+		}
+	}
+
+	int getc_wrapper() {
+		if (buf_==NULL) return getc_fp_wrapper(); // not buffered, just read straight from fp
+		if (bytes_read<max_bytes_) return getc_buffer_wrapper(); // we have not finished reading from the existing buf, so just use that
+
+		next_buffer_chunk();
+		return getc_buffer_wrapper();
+	}
+
 	const int read_fd_;		// socker fd
-	const long int max_bytes_;	// max number of bytes to read from read_fd
+	long int max_bytes_;		// max number of bytes to read from read_fd or buf_
 	long int bytes_read;		// how many bytes did we read so far
+	long int buf_allocated;		// how many bytes does the buf contain
 	AlnSink* msink_;		// Associated sink
-	FILE *fp_;			 // read file currently being read from
+	FILE *fp_;			// read file currently being read from
+	char *buf_;			// If not NULL, read from the buffer
 	//gzFile zfp_;			 // compressed version of fp_
 	//CompressionType compressionType_;
 
@@ -1849,6 +1963,9 @@ private:
 	// returns true if it finds one
 	static bool find_request_terminator(const char str[]);
 
+	// look for Transfer-Encoding: chunked
+	static bool find_chunked_encoding(const char str[]);
+
 	// just return the config
 	// if is_header==true, prepend with X-BT2SRV-
 	bool reply_config(int fd, bool is_header);
@@ -2181,6 +2298,20 @@ private:
 		return write_str(fd, str, len);
 	}
 
+	// prepend string length when sending
+	// also append \r\n at end of str, as per protocol (updates input string in-place)
+	// returns false in case of error
+	static bool write_chunked_str(int fd, char *str, const int str_len) {
+		char hexlen[16];
+		str[str_len] = '\r';
+		str[str_len+1] = '\n';
+		str[str_len+2] = 0;
+		sprintf(hexlen,"%x\r\n",str_len);
+		bool noerr = write_str(fd,hexlen);
+		if (noerr) noerr = write_str(fd,str,str_len+2);
+		return noerr;
+	}
+
 	// read until \n\n detected, discard content
 	// can go over \n\n
         static void finish_header_read(int fd, char *init_buf, int init_len);
@@ -2203,7 +2334,7 @@ private:
 	static void close_socket(int fd);
 
 	static bool socketConnect(int fd, struct addrinfo &res, int port);
-	static bool initialHandshake(int fd, const Config& config);
+	static bool initialHandshake(int fd, const char *hostname, int port, const Config& config);
 	static bool parseHeader(int fd, const Config& config);
 
 	// called by contructor, assumes all but fd have been initialized

@@ -1955,6 +1955,7 @@ bool PatternSourceServiceFactory::read_header(int fd, char *buf, int& buf_len) {
 long int PatternSourceServiceFactory::find_content_length(const char str[]) {
 	long int out = -1;
 	const char *cl_str = strstr(str,"\nContent-Length: ");
+	if (cl_str==NULL) cl_str = strstr(str,"\ncontent-length: ");
 	if (cl_str!=NULL) {
 		int cnt = sscanf(cl_str+17, "%li ", &out);
 		if (cnt!=1) out = -1; // -1 means we did not get the value
@@ -1965,11 +1966,23 @@ long int PatternSourceServiceFactory::find_content_length(const char str[]) {
 bool PatternSourceServiceFactory::find_request_terminator(const char str[]) {
 	int ibool = 0;
 	const char *cl_str = strstr(str,"\nX-BT2SRV-Request-Terminator: ");
+	if (cl_str==NULL) cl_str = strstr(str,"\nx-bt2srv-request-terminator: ");
 	if (cl_str!=NULL) {
 		int cnt = sscanf(cl_str+30, "%i ", &ibool);
 		if (cnt!=1) ibool = 0;
 	}
 	return ibool>0; // may get more fancy in the future, but !=0 good enough for now
+}
+
+bool PatternSourceServiceFactory::find_chunked_encoding(const char str[]) {
+	bool found = false;
+	const char *cl_str = strstr(str,"\nTransfer-Encoding: ");
+	if (cl_str==NULL) cl_str = strstr(str,"\ntransfer-encoding: ");
+	if (cl_str!=NULL) {
+		cl_str = strstr(cl_str+20,"chunked"); // not fool proof, but works for most common use cases
+		found = (cl_str!=NULL);
+	}
+	return found;
 }
 
 // just return the config
@@ -1979,18 +1992,18 @@ bool PatternSourceServiceFactory::reply_config(int fd, bool is_header) {
 	char buf[2048]; // we guarantee that none of the fields will be larger
 	const char *headstr = "";
 	if (is_header) headstr="X-"; // BT2SRV already in the string
-	sprintf(buf,"%sBT2SRV-Version: %s\n",headstr,BOWTIE2_VERSION);
+	sprintf(buf,"%sBT2SRV-Version: %s\r\n",headstr,BOWTIE2_VERSION);
 	noerr = noerr && write_str(fd,buf);
 	if (is_header) headstr="X-BT2SRV-"; // fully qualify the rest
-	sprintf(buf,"%sIndex-Name: %s\n",headstr,this->config_.index_name);
+	sprintf(buf,"%sIndex-Name: %s\r\n",headstr,this->config_.index_name);
 	noerr = noerr && write_str(fd,buf);
-	sprintf(buf,"%sSeed-Len: %i\n",headstr,this->config_.seedLen);
+	sprintf(buf,"%sSeed-Len: %i\r\n",headstr,this->config_.seedLen);
 	noerr = noerr && write_str(fd,buf);
-	sprintf(buf,"%sSeed-Rounds: %i\n",headstr,this->config_.seedRounds);
+	sprintf(buf,"%sSeed-Rounds: %i\r\n",headstr,this->config_.seedRounds);
 	noerr = noerr && write_str(fd,buf);
-	sprintf(buf,"%sMax-DP-Streak: %i\n",headstr,this->config_.maxDpStreak);
+	sprintf(buf,"%sMax-DP-Streak: %i\r\n",headstr,this->config_.maxDpStreak);
 	noerr = noerr && write_str(fd,buf);
-	sprintf(buf,"%sKHits: %i\n",headstr,this->config_.khits);
+	sprintf(buf,"%sKHits: %i\r\n",headstr,this->config_.khits);
 	noerr = noerr && write_str(fd,buf);
 
 	return noerr;
@@ -2071,7 +2084,7 @@ bool PatternSourceServiceFactory::align(int fd, long int data_size) {
 }
 
 bool PatternSourceServiceFactory::is_legit_align_header(char buf[], int nels) {
-	assert(nels>=10);
+	assert(nels>=14);
 	char *url_start = NULL;
 	int url_nels = nels;
 	if (memcmp(buf,"POST /",6)==0) {
@@ -2084,10 +2097,10 @@ bool PatternSourceServiceFactory::is_legit_align_header(char buf[], int nels) {
 		return false; // only PUT and POST could be an align
 	}
 	bool valid_url = false;
-	if (url_nels>=(int(base_url_.length())+11)) {
+	if (url_nels>=(int(base_url_.length())+15)) {
 		if (memcmp(url_start,base_url_.c_str(),base_url_.length())==0) {
 			char *cmd_start = url_start+base_url_.length();
-			if (memcmp(cmd_start,"/align HTTP",11)==0) {
+			if (memcmp(cmd_start,"/align HTTP/1.1",15)==0) {
 				valid_url = true;
 			}
 		}
@@ -2096,7 +2109,7 @@ bool PatternSourceServiceFactory::is_legit_align_header(char buf[], int nels) {
 }
 
 bool PatternSourceServiceFactory::is_legit_config_header(char buf[], int nels) {
-	assert(nels>=10);
+	assert(nels>=14);
 	char *url_start = NULL;
 	int url_nels = nels;
 	if (memcmp(buf,"GET /",5)==0) {
@@ -2106,13 +2119,13 @@ bool PatternSourceServiceFactory::is_legit_config_header(char buf[], int nels) {
 		return false; // only GET could be a config
 	}
 	bool valid_url = false;
-	if ((url_nels>=12) && (memcmp(url_start,"/config HTTP",12)==0)) {
+	if ((url_nels>=16) && (memcmp(url_start,"/config HTTP/1.1",16)==0)) {
 		// basic version, still acceptable
 		valid_url = true;
-	} else if (url_nels>=(int(base_url_.length())+12)) {
+	} else if (url_nels>=(int(base_url_.length())+16)) {
 		if (memcmp(url_start,base_url_.c_str(),base_url_.length())==0) {
 			char *cmd_start = url_start+base_url_.length();
-			if (memcmp(cmd_start,"/config HTTP",12)==0) {
+			if (memcmp(cmd_start,"/config HTTP/1.1",16)==0) {
 				// full url
 				valid_url = true;
 			}
@@ -2127,23 +2140,27 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 		int nels = 0;
 		if (!read_header(client_fd, buf, nels)) {
 			// something got terribly wrong, still try to notify the caller
-			try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
-		} else if (nels<10) {
+			try_write_str(client_fd,"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+		} else if (nels<14) {
 			// no legitimate header is that short, still try to notify the caller
-			try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
+			try_write_str(client_fd,"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
 		} else {
-			assert(nels>=10);
+			assert(nels>=14);
 			buf[nels] = 0; // null terminate, so it is safe to use string search
 			if ( obj->is_legit_align_header(buf,nels) ) {
+				bool noerr = true;
 				// request for alignment
 				bool term = find_request_terminator(buf);
 				long int data_size = find_content_length(buf);
-				// TODO: negative number OK, means 2xnewline terminated
-				// fprintf(stderr,"PatternSourceServiceFactory::Client> align on %i\n",client_fd);
-				bool noerr = write_str(client_fd, "HTTP/1.0 200 OK\n");
+				if (data_size<0) {
+					noerr = find_chunked_encoding(buf);
+					// if no content_length, then it must be chunk encoded
+					if (!noerr) try_write_str(client_fd, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+				}
+				if (noerr) noerr = write_str(client_fd, "HTTP/1.1 200 OK\r\nConnection: close\r\n");
 				if (noerr) noerr = obj->reply_config(client_fd, true);
-				if (noerr && term) noerr = write_str(client_fd, "X-BT2SRV-Terminator: 1\n");
-				if (noerr) noerr = write_str(client_fd, "\n"); // terminate header
+				if (noerr && term) noerr = write_str(client_fd, "X-BT2SRV-Terminator: 1\r\n");
+				if (noerr) noerr = write_str(client_fd, "\r\n"); // terminate header
 				if (noerr) {
 					// the align method will keep reading the input
 					noerr = obj->align(client_fd, data_size);
@@ -2155,20 +2172,20 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 				// if initial write failed, just abort
 			} else if ( obj->is_legit_config_header(buf,nels) ) {
 				// reply with my details on simple get
-				if (write_str(client_fd,"HTTP/1.0 200 OK\n\n")) {
+				if (write_str(client_fd,"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")) {
 					obj->reply_config(client_fd, false);
 				}
-			} else if (memcmp(buf,"GET / HTTP",10)==0) {
+			} else if (memcmp(buf,"GET / HTTP/1.1",14)==0) {
 				// Just tell them who we are
-				try_write_str(client_fd,"HTTP/1.0 200 OK\n\nbowtie2 SaaS\n");
+				try_write_str(client_fd,"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nbowtie2 SaaS\n");
 			} else if ( (memcmp(buf,"GET ",4)==0)  ||
 				    (memcmp(buf,"POST ",5)==0) ||
 				    (memcmp(buf,"PUT ",4)==0) ){
 				// any other get, post or put is invalid
-				try_write_str(client_fd,"HTTP/1.0 400 Bad Request\n\n");
+				try_write_str(client_fd,"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
 			} else {
 				// refuse any other request
-				try_write_str(client_fd,"HTTP/1.0 405 Method Not Allowed\nAllow: GET, POST, PUT\n\n");
+				try_write_str(client_fd,"HTTP/1.1 405 Method Not Allowed\nAllow: GET, POST, PUT\r\nConnection: close\r\n\r\n");
 				// just drop connecton, we do not know if it is even a valid header
 			}
 		}
@@ -2264,19 +2281,25 @@ bool PatternSourceWebClient::socketConnect(int fd, struct addrinfo &res, int por
 }
 
 // send initial request header, and check the reply code
-bool PatternSourceWebClient::initialHandshake(int fd, const Config& config) {
+bool PatternSourceWebClient::initialHandshake(int fd, const char *hostname, int port, const Config& config) {
+	char buf[128];
 	// Standard request the server can understand
 	std::string send("PUT /BT2SRV/");
 	send+=config.index_name;
-	send+="/align HTTP/1.0\nUser-Agent: BT2CLT\nAccept: */*\nX-BT2SRV-Request-Terminator: 1\n\n";
+	send+="/align HTTP/1.1\r\n";
+	sprintf(buf,"%s:%i\r\n",hostname,port);
+	send+="Host: ";
+	send+=buf;
+	send+="User-Agent: BT2CLT\r\nAccept: */*\r\nTransfer-Encoding: chunked\r\n";
+	send+="X-BT2SRV-Request-Terminator: 1\r\n";
+	send+="\r\n";
 	bool success = write_str(fd,send.c_str());
 	if (success) {
-		char buf[16];
 		// we excpect a very well defined reply on success
 		// no need to be fancy (for now)
 		int cnt = ::read(fd, buf, 15);
 		success = ( (cnt==15) && 
-			    (memcmp(buf,"HTTP/1.0 200 OK",15)==0) );
+			    (memcmp(buf,"HTTP/1.1 200 OK",15)==0) );
 	}
 	return success;
 }
@@ -2291,6 +2314,7 @@ bool PatternSourceWebClient::parseHeader(int fd, const PatternSourceWebClient::C
 		// we rely on the terminator to detect successful completion
 		// so make sure the server is promising one
 		success = (strstr(buf,"\nX-BT2SRV-Terminator: 1")!=NULL);
+		if (!success) success = (strstr(buf,"\nx-bt2srv-terminator: 1")!=NULL);
 		if (!success) {
 			fprintf(stderr,"ERROR: Server does not appear to be valid BT2SRV\n");
 			//fprintf(stderr,"Header: %s\n",buf);
@@ -2330,7 +2354,7 @@ int PatternSourceWebClient::fdInit(PatternSourceWebClient *obj) {
 	freeaddrinfo(res); // we do not need the DNS data anymore
 
 	if (success) {
-		success = initialHandshake(fd,obj->config_);
+		success = initialHandshake(fd,obj->server_hostname_,obj->server_port_,obj->config_);
 	}
 
 	if (success) {
@@ -2364,15 +2388,18 @@ void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
 		psq_send.popUpToN(RE_PER_PACKET, re_buf, n_re);
 		if (!obj->goodState()) break; // pop is blocking, things may have changed since last check
 
+		// let's see how much space wee need
 		int re_len = 0;
 		for (int i=0; i<n_re; i++) {
 			re_len += re_buf[i].len+1;
 		}
-		if (re_len>send_alloc) {
+		if ((re_len+4)>send_alloc) { // add some slack at the end for write_chunked_str()
+			// we need more
 			delete[] send_str;
-			send_alloc = re_len;
+			send_alloc = re_len+4;
 			send_str = new char[send_alloc];
 		}
+		// fill the send buffer
 		re_len = 0;
 		for (int i=0; i<n_re; i++) {
 			if (re_buf[i].empty()) {
@@ -2394,21 +2421,27 @@ void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
 				re_buf[i].reset();
 			}
 		}
-		send_str[re_len] = 0;
-		bool success = write_str(fd, send_str, re_len);
-		if (!success) {
-			obj->hasErrors_ = true;
-			fprintf(stderr, "ERROR: Write to server failed, aborting\n");
+		// redy to send the buffer
+		if (re_len>0) { // do nothing if we got an empty buffer (0-sized buffer has special meaning for server)
+			send_str[re_len] = 0;
+			bool success = write_chunked_str(fd, send_str, re_len);
+			if (!success) {
+				obj->hasErrors_ = true;
+				fprintf(stderr, "ERROR: Write to server failed, aborting\n");
+			}
 		}
 
 	}
 
 	//fprintf(stderr, "INFO: Client Write done\n");
 
-	// in order to not lose any buffered data
-	// tell the server the socket is closing
-	// and there will be no more data coming its way
-	if (obj->isConnected_ && (fd>=0)) shutdown(fd, SHUT_WR);
+	if (obj->isConnected_ && (fd>=0)) {
+		write_chunked_str(fd,send_str,0); // 0-size means end-of-data
+		// in order to not lose any buffered data
+		// tell the server the socket is closing
+		// and there will be no more data coming its way
+		shutdown(fd, SHUT_WR);
+	}
 
 	if (obj->hasErrors_) {
 		// push elements into the empty  queue, in case anyone was blocked on it before noticing the error state
