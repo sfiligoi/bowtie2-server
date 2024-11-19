@@ -2285,7 +2285,7 @@ bool PatternSourceWebClient::initialHandshake(int fd, const Config& config) {
 	// Standard request the server can understand
 	std::string send("PUT /BT2SRV/");
 	send+=config.index_name;
-	send+="/align HTTP/1.1\nUser-Agent: BT2CLT\nAccept: */*\nX-BT2SRV-Request-Terminator: 1\n\n";
+	send+="/align HTTP/1.1\nUser-Agent: BT2CLT\nAccept: */*\nTransfer-Encoding: chunked\nX-BT2SRV-Request-Terminator: 1\n\n";
 	bool success = write_str(fd,send.c_str());
 	if (success) {
 		char buf[16];
@@ -2381,15 +2381,18 @@ void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
 		psq_send.popUpToN(RE_PER_PACKET, re_buf, n_re);
 		if (!obj->goodState()) break; // pop is blocking, things may have changed since last check
 
+		// let's see how much space wee need
 		int re_len = 0;
 		for (int i=0; i<n_re; i++) {
 			re_len += re_buf[i].len+1;
 		}
-		if (re_len>send_alloc) {
+		if ((re_len+4)>send_alloc) { // add some slack at the end for write_chunked_str()
+			// we need more
 			delete[] send_str;
-			send_alloc = re_len;
+			send_alloc = re_len+4;
 			send_str = new char[send_alloc];
 		}
+		// fill the send buffer
 		re_len = 0;
 		for (int i=0; i<n_re; i++) {
 			if (re_buf[i].empty()) {
@@ -2411,21 +2414,27 @@ void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
 				re_buf[i].reset();
 			}
 		}
-		send_str[re_len] = 0;
-		bool success = write_str(fd, send_str, re_len);
-		if (!success) {
-			obj->hasErrors_ = true;
-			fprintf(stderr, "ERROR: Write to server failed, aborting\n");
+		// redy to send the buffer
+		if (re_len>0) { // do nothing if we got an empty buffer (0-sized buffer has special meaning for server)
+			send_str[re_len] = 0;
+			bool success = write_chunked_str(fd, send_str, re_len);
+			if (!success) {
+				obj->hasErrors_ = true;
+				fprintf(stderr, "ERROR: Write to server failed, aborting\n");
+			}
 		}
 
 	}
 
 	//fprintf(stderr, "INFO: Client Write done\n");
 
-	// in order to not lose any buffered data
-	// tell the server the socket is closing
-	// and there will be no more data coming its way
-	if (obj->isConnected_ && (fd>=0)) shutdown(fd, SHUT_WR);
+	if (obj->isConnected_ && (fd>=0)) {
+		write_chunked_str(fd,send_str,0); // 0-size means end-of-data
+		// in order to not lose any buffered data
+		// tell the server the socket is closing
+		// and there will be no more data coming its way
+		shutdown(fd, SHUT_WR);
+	}
 
 	if (obj->hasErrors_) {
 		// push elements into the empty  queue, in case anyone was blocked on it before noticing the error state

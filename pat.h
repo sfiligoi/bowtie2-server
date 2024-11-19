@@ -689,7 +689,7 @@ protected:
 			head[hlen] = c;
 			hlen++;
 		}
-		fprintf(stderr,"WARN: Client sent too big of a chunk\n");
+		// fprintf(stderr,"WARN: Client sent too big of a chunk\n");
 		return -1; // if we got here, the counter was too high
 	}
 
@@ -699,7 +699,8 @@ protected:
 		long int len = read_buf_len();
 		// fprintf(stderr, "Buf len: %i\n",int(len));
 		// avoid very large buffers, too
-		if ((len<1) || (len>999999)) { // len==0 means end of data, so treat same as error (TODO: improve)
+		if ((len<0) || (len>999999)) { // len==0 means end of data, so treat same as error (TODO: improve)
+			fprintf(stderr,"WARN: Chunk too large, aborting request!\n");
 			// we know the buffer is at least one by long
 			buf_[0] = EOF;
 			max_bytes_ = 1;
@@ -714,14 +715,34 @@ protected:
 		for (long int i=0; i<len; i++) {
 			int c = getc_unlocked(fp_);
 			if (c==EOF) {
-				// something went wrong, throw away the whole buffer
+				fprintf(stderr,"WARN: Unexpected EOF found!\n");
+				// something went wrong, throw away the whole buffer (TODO: improve)
 				buf_[0] = EOF;
 				max_bytes_ = 1;
 				return;
 			}
 			buf_[i] = c;
 		}
-		max_bytes_ = len;
+		// read and discard the final separator
+		{
+			int c = getc_unlocked(fp_);
+			if (c=='\r') c = getc_unlocked(fp_); // \r is optional
+			if (c!='\n') {
+				fprintf(stderr,"WARN: Invalid chunked termnation, aborting request\n");
+				// something went wrong, throw away the whole buffer (TODO: improve)
+				buf_[0] = EOF;
+				max_bytes_ = 1;
+				return;
+			}
+		}
+
+		if (len>0) {
+			max_bytes_ = len;
+		} else {
+			// len==0 is special, it means this is the last chunk
+			buf_[0] = EOF;
+			max_bytes_ = 1;
+		}
 	}
 
 	int getc_wrapper() {
@@ -2275,6 +2296,19 @@ private:
 	static bool write_str(int fd, const char *str) {
 		int len = strlen(str);
 		return write_str(fd, str, len);
+	}
+
+	// prepend string length when sending
+	// also append \n at end of str, as per protocol (updates input string in-place)
+	// returns false in case of error
+	static bool write_chunked_str(int fd, char *str, const int str_len) {
+		char hexlen[16];
+		str[str_len] = '\n';
+		str[str_len+1] = 0;
+		sprintf(hexlen,"%x\n",str_len);
+		bool noerr = write_str(fd,hexlen);
+		if (noerr) noerr = write_str(fd,str,str_len+1);
+		return noerr;
 	}
 
 	// read until \n\n detected, discard content
