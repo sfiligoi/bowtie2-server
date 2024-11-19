@@ -2314,6 +2314,7 @@ bool PatternSourceWebClient::parseHeader(int fd, const PatternSourceWebClient::C
 		// we rely on the terminator to detect successful completion
 		// so make sure the server is promising one
 		success = (strstr(buf,"\nX-BT2SRV-Terminator: 1")!=NULL);
+		if (!success) success = (strstr(buf,"\nx-bt2srv-terminator: 1")!=NULL);
 		if (!success) {
 			fprintf(stderr,"ERROR: Server does not appear to be valid BT2SRV\n");
 			//fprintf(stderr,"Header: %s\n",buf);
