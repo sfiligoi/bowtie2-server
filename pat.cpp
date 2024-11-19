@@ -1992,18 +1992,18 @@ bool PatternSourceServiceFactory::reply_config(int fd, bool is_header) {
 	char buf[2048]; // we guarantee that none of the fields will be larger
 	const char *headstr = "";
 	if (is_header) headstr="X-"; // BT2SRV already in the string
-	sprintf(buf,"%sBT2SRV-Version: %s\n",headstr,BOWTIE2_VERSION);
+	sprintf(buf,"%sBT2SRV-Version: %s\r\n",headstr,BOWTIE2_VERSION);
 	noerr = noerr && write_str(fd,buf);
 	if (is_header) headstr="X-BT2SRV-"; // fully qualify the rest
-	sprintf(buf,"%sIndex-Name: %s\n",headstr,this->config_.index_name);
+	sprintf(buf,"%sIndex-Name: %s\r\n",headstr,this->config_.index_name);
 	noerr = noerr && write_str(fd,buf);
-	sprintf(buf,"%sSeed-Len: %i\n",headstr,this->config_.seedLen);
+	sprintf(buf,"%sSeed-Len: %i\r\n",headstr,this->config_.seedLen);
 	noerr = noerr && write_str(fd,buf);
-	sprintf(buf,"%sSeed-Rounds: %i\n",headstr,this->config_.seedRounds);
+	sprintf(buf,"%sSeed-Rounds: %i\r\n",headstr,this->config_.seedRounds);
 	noerr = noerr && write_str(fd,buf);
-	sprintf(buf,"%sMax-DP-Streak: %i\n",headstr,this->config_.maxDpStreak);
+	sprintf(buf,"%sMax-DP-Streak: %i\r\n",headstr,this->config_.maxDpStreak);
 	noerr = noerr && write_str(fd,buf);
-	sprintf(buf,"%sKHits: %i\n",headstr,this->config_.khits);
+	sprintf(buf,"%sKHits: %i\r\n",headstr,this->config_.khits);
 	noerr = noerr && write_str(fd,buf);
 
 	return noerr;
@@ -2140,10 +2140,10 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 		int nels = 0;
 		if (!read_header(client_fd, buf, nels)) {
 			// something got terribly wrong, still try to notify the caller
-			try_write_str(client_fd,"HTTP/1.1 400 Bad Request\nConnection: close\n\n");
+			try_write_str(client_fd,"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
 		} else if (nels<14) {
 			// no legitimate header is that short, still try to notify the caller
-			try_write_str(client_fd,"HTTP/1.1 400 Bad Request\nConnection: close\n\n");
+			try_write_str(client_fd,"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
 		} else {
 			assert(nels>=14);
 			buf[nels] = 0; // null terminate, so it is safe to use string search
@@ -2155,12 +2155,12 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 				if (data_size<0) {
 					noerr = find_chunked_encoding(buf);
 					// if no content_length, then it must be chunk encoded
-					if (!noerr) try_write_str(client_fd, "HTTP/1.1 400 Bad Request\nConnection: close\n\n");
+					if (!noerr) try_write_str(client_fd, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
 				}
-				if (noerr) noerr = write_str(client_fd, "HTTP/1.1 200 OK\nConnection: close\n");
+				if (noerr) noerr = write_str(client_fd, "HTTP/1.1 200 OK\r\nConnection: close\r\n");
 				if (noerr) noerr = obj->reply_config(client_fd, true);
-				if (noerr && term) noerr = write_str(client_fd, "X-BT2SRV-Terminator: 1\n");
-				if (noerr) noerr = write_str(client_fd, "\n"); // terminate header
+				if (noerr && term) noerr = write_str(client_fd, "X-BT2SRV-Terminator: 1\r\n");
+				if (noerr) noerr = write_str(client_fd, "\r\n"); // terminate header
 				if (noerr) {
 					// the align method will keep reading the input
 					noerr = obj->align(client_fd, data_size);
@@ -2172,20 +2172,20 @@ void PatternSourceServiceFactory::serveConnection(PatternSourceServiceFactory *o
 				// if initial write failed, just abort
 			} else if ( obj->is_legit_config_header(buf,nels) ) {
 				// reply with my details on simple get
-				if (write_str(client_fd,"HTTP/1.1 200 OK\nConnection: close\n\n")) {
+				if (write_str(client_fd,"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")) {
 					obj->reply_config(client_fd, false);
 				}
 			} else if (memcmp(buf,"GET / HTTP/1.1",14)==0) {
 				// Just tell them who we are
-				try_write_str(client_fd,"HTTP/1.1 200 OK\nConnection: close\n\nbowtie2 SaaS\n");
+				try_write_str(client_fd,"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nbowtie2 SaaS\n");
 			} else if ( (memcmp(buf,"GET ",4)==0)  ||
 				    (memcmp(buf,"POST ",5)==0) ||
 				    (memcmp(buf,"PUT ",4)==0) ){
 				// any other get, post or put is invalid
-				try_write_str(client_fd,"HTTP/1.1 400 Bad Request\nConnection: close\n\n");
+				try_write_str(client_fd,"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
 			} else {
 				// refuse any other request
-				try_write_str(client_fd,"HTTP/1.1 405 Method Not Allowed\nAllow: GET, POST, PUT\nConnection: close\n\n");
+				try_write_str(client_fd,"HTTP/1.1 405 Method Not Allowed\nAllow: GET, POST, PUT\r\nConnection: close\r\n\r\n");
 				// just drop connecton, we do not know if it is even a valid header
 			}
 		}
@@ -2285,7 +2285,7 @@ bool PatternSourceWebClient::initialHandshake(int fd, const Config& config) {
 	// Standard request the server can understand
 	std::string send("PUT /BT2SRV/");
 	send+=config.index_name;
-	send+="/align HTTP/1.1\nUser-Agent: BT2CLT\nAccept: */*\nTransfer-Encoding: chunked\nX-BT2SRV-Request-Terminator: 1\n\n";
+	send+="/align HTTP/1.1\r\nUser-Agent: BT2CLT\r\nAccept: */*\r\nTransfer-Encoding: chunked\r\nX-BT2SRV-Request-Terminator: 1\r\n\r\n";
 	bool success = write_str(fd,send.c_str());
 	if (success) {
 		char buf[16];

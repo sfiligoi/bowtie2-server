@@ -2299,15 +2299,16 @@ private:
 	}
 
 	// prepend string length when sending
-	// also append \n at end of str, as per protocol (updates input string in-place)
+	// also append \r\n at end of str, as per protocol (updates input string in-place)
 	// returns false in case of error
 	static bool write_chunked_str(int fd, char *str, const int str_len) {
 		char hexlen[16];
-		str[str_len] = '\n';
-		str[str_len+1] = 0;
-		sprintf(hexlen,"%x\n",str_len);
+		str[str_len] = '\r';
+		str[str_len+1] = '\n';
+		str[str_len+2] = 0;
+		sprintf(hexlen,"%x\r\n",str_len);
 		bool noerr = write_str(fd,hexlen);
-		if (noerr) noerr = write_str(fd,str,str_len+1);
+		if (noerr) noerr = write_str(fd,str,str_len+2);
 		return noerr;
 	}
 
