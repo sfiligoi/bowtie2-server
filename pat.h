@@ -2334,7 +2334,7 @@ private:
 	static void close_socket(int fd);
 
 	static bool socketConnect(int fd, struct addrinfo &res, int port);
-	static bool initialHandshake(int fd, const Config& config);
+	static bool initialHandshake(int fd, const char *hostname, int port, const Config& config);
 	static bool parseHeader(int fd, const Config& config);
 
 	// called by contructor, assumes all but fd have been initialized

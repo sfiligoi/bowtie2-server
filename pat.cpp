@@ -2281,14 +2281,20 @@ bool PatternSourceWebClient::socketConnect(int fd, struct addrinfo &res, int por
 }
 
 // send initial request header, and check the reply code
-bool PatternSourceWebClient::initialHandshake(int fd, const Config& config) {
+bool PatternSourceWebClient::initialHandshake(int fd, const char *hostname, int port, const Config& config) {
+	char buf[128];
 	// Standard request the server can understand
 	std::string send("PUT /BT2SRV/");
 	send+=config.index_name;
-	send+="/align HTTP/1.1\r\nUser-Agent: BT2CLT\r\nAccept: */*\r\nTransfer-Encoding: chunked\r\nX-BT2SRV-Request-Terminator: 1\r\n\r\n";
+	send+="/align HTTP/1.1\r\n";
+	sprintf(buf,"%s:%i\r\n",hostname,port);
+	send+="Host: ";
+	send+=buf;
+	send+="User-Agent: BT2CLT\r\nAccept: */*\r\nTransfer-Encoding: chunked\r\n";
+	send+="X-BT2SRV-Request-Terminator: 1\r\n";
+	send+="\r\n";
 	bool success = write_str(fd,send.c_str());
 	if (success) {
-		char buf[16];
 		// we excpect a very well defined reply on success
 		// no need to be fancy (for now)
 		int cnt = ::read(fd, buf, 15);
@@ -2347,7 +2353,7 @@ int PatternSourceWebClient::fdInit(PatternSourceWebClient *obj) {
 	freeaddrinfo(res); // we do not need the DNS data anymore
 
 	if (success) {
-		success = initialHandshake(fd,obj->config_);
+		success = initialHandshake(fd,obj->server_hostname_,obj->server_port_,obj->config_);
 	}
 
 	if (success) {
