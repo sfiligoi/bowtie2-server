@@ -2244,7 +2244,7 @@ void PatternSourceWebClient::ReadElement::readPair2Tab6(const Read& read_a, cons
 	size_t total_len = read_a.name.length()+1+read_a.patFw.length()+1+read_a.qual.length();
 	if (!read_b.empty()) {
 		// paired
-		total_len += 1+read_b.patFw.length()+1+read_b.qual.length();
+		total_len += 1+read_b.name.length()+1+read_b.patFw.length()+1+read_b.qual.length();
 	}
 	ReadElement& out = *this;
 	out.clear_and_alloc(total_len+1);
@@ -2254,6 +2254,8 @@ void PatternSourceWebClient::ReadElement::readPair2Tab6(const Read& read_a, cons
 	out.append('\t');
 	out.append(read_a.qual.toZBuf(),read_a.qual.length());
 	if (!read_b.empty()) {
+		out.append('\t');
+		out.append(read_b.name.buf(),read_b.name.length());
 		out.append('\t');
 		out.append(read_b.patFw.toZBuf(),read_b.patFw.length());
 		out.append('\t');
