@@ -2126,6 +2126,29 @@ void AlnSinkSam::appendMate(
 
 }
 
+void AlnSinkSam::appendReadComplete(
+	BTString&             o,
+	StackedAln&           staln,
+	size_t                threadId,
+	const Read           *rd1,
+	const Read           *rd2,
+	const TReadId         rdid)
+{
+	if (sendReadComplete_) {
+		o.append("@CO END READ");
+		if (rd1!=NULL) {
+			o.append('\t');
+			samc_.printReadName(o, rd1->name, rd2!=NULL);
+		}
+		if (rd2!=NULL) {
+			o.append('\t');
+			samc_.printReadName(o, rd2->name, rd1!=NULL);
+		}
+		o.append('\n');
+	}
+	// nothing to do, else
+}
+
 #ifdef ALN_SINK_MAIN
 
 #include <iostream>

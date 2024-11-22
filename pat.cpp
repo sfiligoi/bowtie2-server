@@ -2032,6 +2032,7 @@ bool PatternSourceServiceFactory::align(int fd, long int data_size) {
                 readsPerBatch,                   // size of output buffer of reads
                 0); // no reason to skip reads
 	AlnSinkSam msink(template_msink_, oq);
+	msink.sendReadComplete();
 
 	EList<PatternSource*>* comp_params  = new EList<PatternSource*>();
 	auto *ps = new TabbedSocketPatternSource(pp_, fd, data_size, &msink);

@@ -642,6 +642,18 @@ public:
 		bool                  report2) = 0;
 
 	/**
+	 * Append a commend about the read being completed.
+	 * If synchronization is required, appendReadComplete() assumes 
+	 * the caller has already grabbed the appropriate lock.
+	 */
+	virtual void appendReadComplete(
+		BTString&             o,
+		StackedAln&           staln,
+		size_t                threadId,
+		const Read           *rd1,
+		const Read           *rd2,
+		const TReadId         rdid) = 0;
+	/**
 	 * Report a given batch of hits for the given read or read pair.
 	 * Should be called just once per read pair.  Assumes all the
 	 * alignments are paired, split between rs1 and rs2.
@@ -734,6 +746,7 @@ public:
 				}
 			}
 		}
+		appendReadComplete(o, staln, threadId, rd1, rd2, rdid);
 	}
 
 	/**
@@ -760,6 +773,7 @@ public:
 	{
 		append(o, staln, threadId, rd1, rd2, rdid, NULL, NULL, summ,
 		       ssm1, ssm2, flags1, flags2, prm, mapq, sc, report2);
+		appendReadComplete(o, staln, threadId, rd1, rd2, rdid);
 	}
 
 	/**
@@ -1312,7 +1326,8 @@ public:
 			oq,
 			refnames,
 			quiet),
-		samc_(samc)
+		samc_(samc),
+		sendReadComplete_(false)
 	{ }
 
 	AlnSinkSam(
@@ -1320,17 +1335,21 @@ public:
 		OutputQueue&     oq,           // output queue
 		const SamConfig& samc):         // settings & routines for SAM output
 		AlnSink(other, oq),
-		samc_(samc)
+		samc_(samc),
+		sendReadComplete_(false)
 	{ }
 
 	AlnSinkSam(
 		const AlnSinkSam& other,
 		OutputQueue&     oq):           // output queue
 		AlnSink(other, oq),
-		samc_(other.samc_)
+		samc_(other.samc_),
+		sendReadComplete_(other.sendReadComplete_)
 	{ }
 
 	virtual ~AlnSinkSam() { }
+
+	void sendReadComplete() { sendReadComplete_ = true; }
 
 	/**
 	 * Append a single alignment result, which might be paired or
@@ -1370,6 +1389,19 @@ public:
 		}
 	}
 
+	/**
+	 * Append a commend about the read being completed.
+	 * If synchronization is required, appendReadComplete() assumes 
+	 * the caller has already grabbed the appropriate lock.
+	 */
+	virtual void appendReadComplete(
+		BTString&             o,
+		StackedAln&           staln,
+		size_t                threadId,
+		const Read           *rd1,
+		const Read           *rd2,
+		const TReadId         rdid);
+
 protected:
 
 	/**
@@ -1394,6 +1426,7 @@ protected:
 		const Scoring& sc);        // scoring scheme
 
 	const SamConfig& samc_;    // settings & routines for SAM output
+	bool             sendReadComplete_; // true -> send read complete comments
 	BTDnaString      dseq_;    // buffer for decoded read sequence
 	BTString         dqual_;   // buffer for decoded quality sequence
 };
