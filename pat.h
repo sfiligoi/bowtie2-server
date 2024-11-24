@@ -2169,46 +2169,61 @@ private:
 public:
 	class ReadElement {
 	private:
+		// Buffer containing the tab6-formatted string
 		char    *tab6_str;
-		uint32_t capacity;
+		uint32_t tab6_capacity;
+		uint32_t tab6_len;
 	public:
-		ReadElement() : tab6_str(NULL), capacity(0), len(0) {}
+		ReadElement() : tab6_str(NULL), tab6_capacity(0), tab6_len(0) {}
 		~ReadElement() {
-			//if (tab6_str!=NULL) delete[] tab6_str;
+			reset();
 		}
 
-		ReadElement(const ReadElement& other) = default;
-		ReadElement& operator=(const ReadElement& other) = default;
+		ReadElement(const ReadElement& other) : tab6_str(NULL), tab6_capacity(0), tab6_len(other.tab6_len) {
+			clear_and_alloc(other.tab6_capacity);
+			if (tab6_len>0) {
+				memcpy(tab6_str, other.tab6_str,tab6_len);
+			}
+		}
 
-		ReadElement(ReadElement&& other) {
-			tab6_str = other.tab6_str;
+		ReadElement& operator=(const ReadElement& other) {
+			clear_and_alloc(other.tab6_capacity);
+			tab6_len = other.tab6_len;
+			if (tab6_len>0) {
+				memcpy(tab6_str, other.tab6_str,tab6_len);
+			}
+			return *this;
+		}
+
+		ReadElement(ReadElement&& other) : tab6_str(other.tab6_str), tab6_capacity(other.tab6_capacity), tab6_len(other.tab6_len){
 			other.tab6_str = NULL;
-			capacity = other.capacity;
-			other.capacity = 0;
-			len = other.len;
-			other.len = 0;
+			other.tab6_capacity = 0;
+			other.tab6_len = 0;
 		}
 
 		// fill this buffer with tab6 data from the two reads
 		void readPair2Tab6(const Read& read_a, const Read& read_b);
 
 		bool empty() { return tab6_str==NULL; }
+
 		char *buf() {return tab6_str;};
 		const char *buf() const {return tab6_str;};
+		uint32_t buf_len() const {return tab6_len;}
 
-		uint32_t len;
 
 		// =======================
 		// mostly for internal use
 
 		void clear_and_alloc(size_t size);
+		// assumes the buffer is already allocated and large enough
 		void append(const char *str, size_t str_len);
+		// assumes the buffer is already allocated and large enough
 		void append(const char chr);
 		void reset() {
 			if (tab6_str!=NULL) delete[] tab6_str;
 			tab6_str = NULL;
-			capacity=0;
-			len=0;
+			tab6_capacity=0;
+			tab6_len=0;
 		}
 	};
 

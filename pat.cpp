@@ -2218,24 +2218,26 @@ void tooManyQualities(const BTString& read_name) {
 // ================== PatternSourceWebClient
 
 void PatternSourceWebClient::ReadElement::clear_and_alloc(size_t size) {
-	if  (capacity<size) {
+	if  (tab6_capacity<size) {
 		if (tab6_str!=NULL) delete[] tab6_str;
 		tab6_str = new char[size];
-		capacity = size;
+		tab6_capacity = size;
 	} // else, reuse the same buffer
-	len = 0;
+	tab6_len = 0;
 }
 
+// assumes the buffer is already allocated and large enough
 void PatternSourceWebClient::ReadElement::append(const char *str, size_t str_len) {
-	assert((len+str_len)<=capacity);
-	memcpy(tab6_str+len,str,str_len);
-	len+=str_len;
+	assert((tab6_len+str_len)<=tab6_capacity);
+	memcpy(tab6_str+tab6_len,str,str_len);
+	tab6_len+=str_len;
 }
 
+// assumes the buffer is already allocated and large enough
 void PatternSourceWebClient::ReadElement::append(const char chr) {
-	assert(len<capacity);
-	tab6_str[len] = chr;
-	len++;
+	assert(tab6_len<tab6_capacity);
+	tab6_str[tab6_len] = chr;
+	tab6_len++;
 }
 
 // Returns a new string in tab6 format
@@ -2391,10 +2393,10 @@ void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
 		psq_send.popUpToN(RE_PER_PACKET, re_buf, n_re);
 		if (!obj->goodState()) break; // pop is blocking, things may have changed since last check
 
-		// let's see how much space wee need
+		// let's see how much space we need
 		int re_len = 0;
 		for (int i=0; i<n_re; i++) {
-			re_len += re_buf[i].len+1;
+			re_len += re_buf[i].buf_len()+1;
 		}
 		if ((re_len+4)>send_alloc) { // add some slack at the end for write_chunked_str()
 			// we need more
@@ -2409,8 +2411,9 @@ void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
 				// finalize() put this in to signal we are done
 				found_null = true;
 			} else {
-				memcpy(send_str+re_len, re_buf[i].buf(), re_buf[i].len);
-				re_len += re_buf[i].len;
+				const auto buf_len = re_buf[i].buf_len();
+				memcpy(send_str+re_len, re_buf[i].buf(), buf_len);
+				re_len += buf_len;
 				send_str[re_len] = '\n';
 				re_len += 1;
 			}
