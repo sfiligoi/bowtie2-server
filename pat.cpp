@@ -2217,17 +2217,25 @@ void tooManyQualities(const BTString& read_name) {
 
 // ================== PatternSourceWebClient
 
-void PatternSourceWebClient::ReadElement::clear_and_alloc(size_t size) {
+void PatternSourceWebClient::ReadElement::tab6_alloc(uint32_t size) {
 	if  (tab6_capacity<size) {
 		if (tab6_str!=NULL) delete[] tab6_str;
 		tab6_str = new char[size];
 		tab6_capacity = size;
 	} // else, reuse the same buffer
+}
+
+void PatternSourceWebClient::ReadElement::clear_and_alloc(uint32_t size) {
+	tab6_alloc(size);
 	tab6_len = 0;
+	readaNameBuf_offs = 0;
+	readbNameBuf_offs = 0;
+	readaNameBuf_len = 0;
+	readbNameBuf_len = 0;
 }
 
 // assumes the buffer is already allocated and large enough
-void PatternSourceWebClient::ReadElement::append(const char *str, size_t str_len) {
+void PatternSourceWebClient::ReadElement::append(const char *str, uint32_t str_len) {
 	assert((tab6_len+str_len)<=tab6_capacity);
 	memcpy(tab6_str+tab6_len,str,str_len);
 	tab6_len+=str_len;
@@ -2240,11 +2248,28 @@ void PatternSourceWebClient::ReadElement::append(const char chr) {
 	tab6_len++;
 }
 
+void PatternSourceWebClient::ReadElement::origbuf_alloc(uint32_t size) {
+	if  (readPairOrigBuf_capacity<size) {
+		if (readPairOrigBuf!=NULL) delete[] readPairOrigBuf;
+		readPairOrigBuf = new char[size];
+		readPairOrigBuf_capacity = size;
+	} // else, reuse the same buffer
+}
+
+void PatternSourceWebClient::ReadElement::saveOrigBufs(const Read& read_a, const Read& read_b) {
+	readaOrigBuf_len = read_a.readOrigBuf.length();
+	readbOrigBuf_len = read_b.empty() ? 0 : read_b.readOrigBuf.length();
+	origbuf_alloc(readaOrigBuf_len+readbOrigBuf_len);
+	if (readaOrigBuf_len>0) memcpy(readPairOrigBuf+0,               read_a.readOrigBuf.buf(),readaOrigBuf_len);
+	if (readbOrigBuf_len>0) memcpy(readPairOrigBuf+readaOrigBuf_len,read_b.readOrigBuf.buf(),readbOrigBuf_len);
+}
+
 // Returns a new string in tab6 format
 // Caller gets ownership of the pointer
 // Note that the returned size does not include the terminating null character
 void PatternSourceWebClient::ReadElement::readPair2Tab6(const Read& read_a, const Read& read_b) {
-	size_t total_len = read_a.name.length()+1+read_a.patFw.length()+1+read_a.qual.length();
+	uint32_t total_len = read_a.name.length()+1+read_a.patFw.length()+1+read_a.qual.length();
+	const uint32_t read_b_offs = total_len + 1; // only valid if !read_b.empty()
 	if (!read_b.empty()) {
 		// paired
 		total_len += 1+read_b.name.length()+1+read_b.patFw.length()+1+read_b.qual.length();
@@ -2265,6 +2290,12 @@ void PatternSourceWebClient::ReadElement::readPair2Tab6(const Read& read_a, cons
 		out.append(read_b.qual.toZBuf(),read_b.qual.length());
 	}
 	out.append('\0');
+	if (read_b.empty()) {
+		out.set_read_names(0,read_a.name.length(),0,0);
+	} else {
+		out.set_read_names(0,read_a.name.length(),read_b_offs,read_b.name.length());
+	}
+	out.saveOrigBufs(read_a,read_b);
 }
 
 // read until \n\n detected
