@@ -2244,7 +2244,7 @@ void PatternSourceWebClient::ReadElement::append(const char chr) {
 	tab6_len++;
 }
 
-void PatternSourceWebClient::ReadElement::origbuf_alloc(uint32_t size) {
+void PatternSourceWebClient::OrigBuf::origbuf_alloc(uint32_t size) {
 	if  (readPairOrigBuf_capacity<size) {
 		if (readPairOrigBuf!=NULL) delete[] readPairOrigBuf;
 		readPairOrigBuf = new char[size];
@@ -2252,7 +2252,7 @@ void PatternSourceWebClient::ReadElement::origbuf_alloc(uint32_t size) {
 	} // else, reuse the same buffer
 }
 
-void PatternSourceWebClient::ReadElement::saveOrigBufs(const Read& read_a, const Read& read_b) {
+void PatternSourceWebClient::OrigBuf::saveOrigBufs(const Read& read_a, const Read& read_b) {
 	readaOrigBuf_len = read_a.readOrigBuf.length();
 	readbOrigBuf_len = read_b.empty() ? 0 : read_b.readOrigBuf.length();
 	readaNameBuf_len = read_a.name.length();
@@ -2307,7 +2307,7 @@ void PatternSourceWebClient::ReadElement::readPair2Tab6(const Read& read_a, cons
 		out.append(read_b.qual.toZBuf(),read_b.qual.length());
 	}
 	out.append('\0');
-	out.saveOrigBufs(read_a,read_b);
+	out.readPairOrigBuf.saveOrigBufs(read_a,read_b);
 }
 
 // read until \n\n detected
