@@ -2174,23 +2174,23 @@ public:
 		uint32_t tab6_capacity;
 		uint32_t tab6_len;
 
-		// The names of the read pair
-		uint32_t readaNameBuf_offs; // read a offset in tab6_str
-		uint32_t readbNameBuf_offs; // read b offset in tab6_str
-		uint32_t readaNameBuf_len; // read_a len
-		uint32_t readbNameBuf_len; // read b len
-
 		// For remembering the exact input text used to define the read pair
 		char    *readPairOrigBuf;
 		uint32_t readPairOrigBuf_capacity;
 		uint32_t readaOrigBuf_len; // read_a len
 		uint32_t readbOrigBuf_len; // read b len
+		// read names are appended behind the origbuf data
+		uint32_t readaNameBuf_len; // read_a len
+		uint32_t readbNameBuf_len; // read b len
 
+		uint32_t readOrigBuf_len() const {return readaOrigBuf_len+readbOrigBuf_len+readaNameBuf_len+readbNameBuf_len+4;}
+ 
 	public:
 		ReadElement() 
 			: tab6_str(NULL), tab6_capacity(0), tab6_len(0)
-			, readaNameBuf_offs(0), readbNameBuf_offs(0), readaNameBuf_len(0), readbNameBuf_len()
-			, readPairOrigBuf(NULL), readPairOrigBuf_capacity(0), readaOrigBuf_len(0), readbOrigBuf_len(0)
+			, readPairOrigBuf(NULL), readPairOrigBuf_capacity(0)
+			, readaOrigBuf_len(0), readbOrigBuf_len(0)
+			, readaNameBuf_len(0), readbNameBuf_len(0)
 		{}
 		~ReadElement() {
 			reset();
@@ -2198,10 +2198,9 @@ public:
 
 		ReadElement(const ReadElement& other)
 			: tab6_str(NULL), tab6_capacity(0), tab6_len(other.tab6_len) 
-			, readaNameBuf_offs(other.readaNameBuf_offs), readbNameBuf_offs(other.readbNameBuf_offs)
-			, readaNameBuf_len(other.readaNameBuf_len), readbNameBuf_len(other.readbNameBuf_len)
 			, readPairOrigBuf(NULL), readPairOrigBuf_capacity(0)
 			, readaOrigBuf_len(other.readaOrigBuf_len), readbOrigBuf_len(other.readbOrigBuf_len)
+			, readaNameBuf_len(other.readaNameBuf_len), readbNameBuf_len(other.readbNameBuf_len)
 		{
 			if (tab6_len>0) {
 				// alloc only what we need, even if other buf was much larger for historical reasons
@@ -2211,11 +2210,10 @@ public:
 				// since tab6_str==NULL is special, make sure mine is not null, either
 				tab6_alloc(1);
 			}
-			uint32_t readbOrigBufPair_len = readaOrigBuf_len+readbOrigBuf_len;
-			if (readbOrigBufPair_len>0) {
+			const uint32_t readbOrigBufPair_len = readOrigBuf_len();
+			if ((other.readPairOrigBuf!=NULL) && (readbOrigBufPair_len>0)) {
 				origbuf_alloc(readbOrigBufPair_len);
-				if (readaOrigBuf_len>0) memcpy(readPairOrigBuf+0,other.readPairOrigBuf+0,readaOrigBuf_len);
-				if (readbOrigBuf_len>0) memcpy(readPairOrigBuf+readaOrigBuf_len,other.readPairOrigBuf+readaOrigBuf_len,readbOrigBuf_len);
+				memcpy(readPairOrigBuf,other.readPairOrigBuf,readbOrigBufPair_len);
 			}
 		}
 
@@ -2229,17 +2227,14 @@ public:
                                 // since tab6_str==NULL is special, make sure mine is not null, either
                                 tab6_alloc(1);
                         }
-			readaNameBuf_offs = other.readaNameBuf_offs;
-			readbNameBuf_offs = other.readbNameBuf_offs;
-			readaNameBuf_len = other.readaNameBuf_len;
-			readbNameBuf_len = other.readbNameBuf_len;
 			readaOrigBuf_len = other.readaOrigBuf_len;
 			readbOrigBuf_len = other.readbOrigBuf_len;
-			uint32_t readbOrigBufPair_len = readaOrigBuf_len+readbOrigBuf_len;
-			if (readbOrigBufPair_len>0) {
+			readaNameBuf_len = other.readaNameBuf_len;
+			readbNameBuf_len = other.readbNameBuf_len;
+			const uint32_t readbOrigBufPair_len = readOrigBuf_len();
+			if ((other.readPairOrigBuf!=NULL) && (readbOrigBufPair_len>0)) {
 				origbuf_alloc(readbOrigBufPair_len);
-				if (readaOrigBuf_len>0) memcpy(readPairOrigBuf+0,other.readPairOrigBuf+0,readaOrigBuf_len);
-				if (readbOrigBuf_len>0) memcpy(readPairOrigBuf+readaOrigBuf_len,other.readPairOrigBuf+readaOrigBuf_len,readbOrigBuf_len);
+				memcpy(readPairOrigBuf,other.readPairOrigBuf,readbOrigBufPair_len);
 			}
 
 			return *this;
@@ -2247,22 +2242,19 @@ public:
 
 		ReadElement(ReadElement&& other)
 			: tab6_str(other.tab6_str), tab6_capacity(other.tab6_capacity), tab6_len(other.tab6_len) 
-			, readaNameBuf_offs(other.readaNameBuf_offs), readbNameBuf_offs(other.readbNameBuf_offs)
-			, readaNameBuf_len(other.readaNameBuf_len), readbNameBuf_len(other.readbNameBuf_len)
 			, readPairOrigBuf(other.readPairOrigBuf), readPairOrigBuf_capacity(other.readPairOrigBuf_capacity)
 			, readaOrigBuf_len(other.readaOrigBuf_len), readbOrigBuf_len(other.readbOrigBuf_len)
+			, readaNameBuf_len(other.readaNameBuf_len), readbNameBuf_len(other.readbNameBuf_len)
 		{
 			other.tab6_str = NULL;
 			other.tab6_capacity=0;
 			other.tab6_len=0;
-			other.readaNameBuf_offs = 0;
-			other.readbNameBuf_offs = 0;
-			other.readaNameBuf_len = 0;
-			other.readbNameBuf_len = 0;
 			other.readPairOrigBuf = NULL;
 			other.readPairOrigBuf_capacity = 0;
 			other.readaOrigBuf_len = 0;
 			other.readbOrigBuf_len = 0;
+			other.readaNameBuf_len = 0;
+			other.readbNameBuf_len = 0;
 		}
 
 		// fill this buffer with tab6 data from the two reads
@@ -2274,6 +2266,23 @@ public:
 		const char *buf() const {return tab6_str;};
 		uint32_t buf_len() const {return tab6_len;}
 
+		const char *name_buf(bool get_read_b) const {
+			if (readPairOrigBuf==NULL) return NULL;
+			uint32_t off = readaOrigBuf_len+readbOrigBuf_len+2;
+			if (get_read_b) off += readaNameBuf_len+1;
+			return readPairOrigBuf+off;
+		}
+
+		uint32_t name_len(bool get_read_b) const { return get_read_b? readbNameBuf_len : readaNameBuf_len;}
+
+		const char *orig_buf(bool get_read_b) const {
+			if (readPairOrigBuf==NULL) return NULL;
+			uint32_t off = 0;
+			if (get_read_b) off += readaOrigBuf_len+1;
+			return readPairOrigBuf+off;
+		}
+
+		uint32_t orig_len(bool get_read_b) const { return get_read_b? readbOrigBuf_len : readaOrigBuf_len;}
 
 		// =======================
 		// mostly for internal use
@@ -2284,28 +2293,18 @@ public:
 		// assumes the buffer is already allocated and large enough
 		void append(const char chr);
 
-		void set_read_names(uint32_t offs_a, uint32_t len_a, uint32_t offs_b, uint32_t len_b)
-		{
-			readaNameBuf_offs = offs_a;
-			readbNameBuf_offs = offs_b;
-			readaNameBuf_len = len_a;
-			readbNameBuf_len = len_b;
-		}
-
 		void reset() {
 			if (tab6_str!=NULL) delete[] tab6_str;
 			tab6_str = NULL;
 			tab6_capacity=0;
 			tab6_len=0;
-			readaNameBuf_offs = 0;
-			readbNameBuf_offs = 0;
-			readaNameBuf_len = 0;
-			readbNameBuf_len = 0;
 			if (readPairOrigBuf!=NULL) delete[] readPairOrigBuf;
 			readPairOrigBuf = NULL;
 			readPairOrigBuf_capacity = 0;
 			readaOrigBuf_len = 0;
 			readbOrigBuf_len = 0;
+			readaNameBuf_len = 0;
+			readbNameBuf_len = 0;
 		}
 	private:
 		void tab6_alloc(uint32_t size);
