@@ -698,11 +698,11 @@ protected:
 		bytes_read = 0;
 		// read the length
 		long int len = read_buf_len();
-		// fprintf(stderr, "Buf len: %i\n",int(len));
+		//fprintf(stderr, "Buf len: %i\n",int(len));
 		// avoid very large buffers, too
 		if ((len<0) || (len>999999)) { // len==0 means end of data, so treat same as error (TODO: improve)
-			fprintf(stderr,"WARN: Chunk too large, aborting request!\n");
-			// we know the buffer is at least one by long
+			if (len>=0) fprintf(stderr,"WARN: Chunk too large, aborting request!\n");
+			// we know the buffer is at least one byte long
 			buf_[0] = EOF;
 			max_bytes_ = 1;
 			return;
@@ -2166,6 +2166,7 @@ private:
 // not a real PatternSource, but it is convenient to keep client and server in the same source file
 class PatternSourceWebClient {
 private:
+	class LockedOrigBufMap;
 	class LockedIdleQueueCV;
 public:
 	// For remembering the exact input text used to define the read pair
@@ -2339,7 +2340,7 @@ public:
 		}
 
 		// fill this buffer with tab6 data from the two reads
-		void readPair2Tab6(const Read& read_a, const Read& read_b);
+		void readPair2Tab6(PatternSourceWebClient::LockedOrigBufMap& obmap, const Read& read_a, const Read& read_b);
 
 		bool empty() { return tab6_str==NULL; }
 
@@ -2399,6 +2400,7 @@ public:
 		server_port_(server_port),
 		config_(config),
 		obuf_(obuf),
+		obmap_(),
 		psq_empty_(n_writecache),
 		psq_send_(),
 		hasErrors_(false),
@@ -2424,7 +2426,7 @@ public:
 		if (!goodState()) return false;
 		ReadElement el(psq_empty_.pop());
 		if (goodState()) {
-			el.readPair2Tab6(read_a,read_b);
+			el.readPair2Tab6(obmap_,read_a,read_b);
 			psq_send_.push(el);
 		}
 		return goodState();
@@ -2445,7 +2447,93 @@ public:
 	static constexpr int RE_PER_PACKET = 40; // can be small-ish, we just need enough for a couple IP packets, and each line is O(100) bytes
 
 private:
-	
+	/*
+	 * Use a ordered list to remember the original read names and bufs
+	 * since we are sending only the id to the server.
+	 *
+	 * To minimize lookup costs, we use a direct idx->buf linear mapping,
+	 * only resetting the counter when we empty the buffer.
+	 *
+	 * To avoid waiting (most of the times), we use two internal buffers
+	 * so one is typically filled and the other is being emptied.
+	 */
+	class LockedOrigBufMap {
+	public:
+		static constexpr uint16_t BUF_CAPACITY = 10000;
+
+		LockedOrigBufMap()
+			: buf0_used_idx(0), buf1_used_idx(0)
+			, buf0_used_cnt(0), buf1_used_cnt(0)
+		{} // use default contructor for the rest
+
+		// save the origbufs and names in the map
+		// return index on how to access it
+		uint16_t saveOrigBufs(const Read& read_a, const Read& read_b) {
+			OrigBuf ob;
+			ob.saveOrigBufs(read_a, read_b);
+			return take_ownership(std::move(ob));
+		}
+
+		// Retrieval API
+		// Caller responsible for ensuring idx is (still) valid
+		const OrigBuf& lookup(uint16_t idx) const { 
+			// no locking needed
+			return (idx<BUF_CAPACITY) ? buf0[idx] : buf1[idx-BUF_CAPACITY]; 
+		}
+
+		OrigBuf release(uint16_t idx) {
+			std::unique_lock<std::mutex> lk(m_);
+			OrigBuf out = std::move((idx<BUF_CAPACITY) ? buf0[idx] : buf1[idx-BUF_CAPACITY]);
+			if (idx<BUF_CAPACITY) {
+				buf0_used_cnt--;
+				if (buf0_used_cnt==0) {
+					// since we emptied the buffer, we can write again
+					buf0_used_idx = 0;
+					cv_.notify_all();
+				}
+			} else {
+				buf1_used_cnt--;
+				if (buf1_used_cnt==0) {
+					// since we emptied the buffer, we can write again
+					buf1_used_idx = 0;
+					cv_.notify_all();
+				}
+			}
+			return out; // ideally this will be a move after optimization
+		}
+
+	private:
+		uint16_t take_ownership(OrigBuf&& el) {
+			std::unique_lock<std::mutex> lk(m_);
+			cv_.wait(lk, [this] { return (buf0_used_idx<BUF_CAPACITY) || (buf1_used_idx<BUF_CAPACITY);});
+			uint16_t myidx;
+			if (buf0_used_idx<BUF_CAPACITY) {
+				myidx = buf0_used_idx;
+				buf0[myidx] = std::move(el);
+				buf0_used_idx++;
+				buf0_used_cnt++;
+			} else {
+				assert(buf1_used_idx<BUF_CAPACITY);
+				myidx = buf1_used_idx;
+				buf1[myidx] = std::move(el);
+				buf1_used_idx++;
+				buf1_used_cnt++;
+				myidx+=BUF_CAPACITY;
+			}
+
+			return myidx;
+		}
+
+		uint16_t buf0_used_idx;
+		uint16_t buf1_used_idx;
+		uint16_t buf0_used_cnt;
+		uint16_t buf1_used_cnt;
+		std::array<OrigBuf,BUF_CAPACITY> buf0;
+		std::array<OrigBuf,BUF_CAPACITY> buf1;
+		std::mutex m_;
+		std::condition_variable cv_;
+	};
+
 	template <typename T>
 	class LockedQueueCV {
 	public:
@@ -2628,6 +2716,7 @@ private:
 	const Config& config_;
 	OutFileBuf& obuf_;
 
+	LockedOrigBufMap   obmap_;
 	LockedEmptyQueueCV psq_empty_;
 	LockedSendQueueCV  psq_send_;
 

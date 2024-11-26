@@ -2258,16 +2258,16 @@ void PatternSourceWebClient::OrigBuf::saveOrigBufs(const Read& read_a, const Rea
 	readaNameBuf_len = read_a.name.length();
 	readbNameBuf_len = read_b.empty() ? 0 : read_b.name.length();
 
-	const uint32_t readbOrigBufPair_len = readOrigBuf_len();
-	assert(readbOrigBufPair_len == (readaOrigBuf_len+readbOrigBuf_len+readaNameBuf_len+readbNameBuf_len+4));
-	if (readbOrigBufPair_len>0) {
-		origbuf_alloc(readbOrigBufPair_len);
+	const uint32_t readOrigBufPair_len = readOrigBuf_len();
+	assert(readOrigBufPair_len == (readaOrigBuf_len+readbOrigBuf_len+readaNameBuf_len+readbNameBuf_len+4));
+	if (readOrigBufPair_len>0) {
+		origbuf_alloc(readOrigBufPair_len);
 		uint32_t off = 0;
 		if (readaOrigBuf_len>0) memcpy(readPairOrigBuf+off, read_a.readOrigBuf.buf(),readaOrigBuf_len);
 		off += readaOrigBuf_len;
 		readPairOrigBuf[off] = 0;
 		off++;
-		if (readbOrigBuf_len>0) memcpy(readPairOrigBuf+off, read_b.readOrigBuf.buf(),readaOrigBuf_len);
+		if (readbOrigBuf_len>0) memcpy(readPairOrigBuf+off, read_b.readOrigBuf.buf(),readbOrigBuf_len);
 		off += readbOrigBuf_len;
 		readPairOrigBuf[off] = 0;
 		off++;
@@ -2285,22 +2285,33 @@ void PatternSourceWebClient::OrigBuf::saveOrigBufs(const Read& read_a, const Rea
 // Returns a new string in tab6 format
 // Caller gets ownership of the pointer
 // Note that the returned size does not include the terminating null character
-void PatternSourceWebClient::ReadElement::readPair2Tab6(const Read& read_a, const Read& read_b) {
-	uint32_t total_len = read_a.name.length()+1+read_a.patFw.length()+1+read_a.qual.length();
+void PatternSourceWebClient::ReadElement::readPair2Tab6(PatternSourceWebClient::LockedOrigBufMap& obmap, const Read& read_a, const Read& read_b) {
+	// save the original names and origbuf
+	const int ob_idx = obmap.saveOrigBufs(read_a,read_b);
+	constexpr uint32_t ob_name_len = 6;
+	char ob_name_a[8];
+	char ob_name_b[8];
+	sprintf(ob_name_a, "%04X/1", ob_idx);
+	sprintf(ob_name_b, "%04X/2", ob_idx);
+
+	// send only the index to the server
+	uint32_t total_len = ob_name_len+1+read_a.patFw.length()+1+read_a.qual.length();
+	//fprintf(stderr, "read_a '%s' %s'\n",read_a.name.toZBuf(), ob_name_a);
 	if (!read_b.empty()) {
 		// paired
-		total_len += 1+read_b.name.length()+1+read_b.patFw.length()+1+read_b.qual.length();
+		total_len += 1+ob_name_len+1+read_b.patFw.length()+1+read_b.qual.length();
+		//fprintf(stderr, "read_ab '%s' %s'\n",read_b.name.toZBuf(), ob_name_b);
 	}
 	ReadElement& out = *this;
 	out.clear_and_alloc(total_len+1);
-	out.append(read_a.name.buf(),read_a.name.length());
+	out.append(ob_name_a,ob_name_len);
 	out.append('\t');
 	out.append(read_a.patFw.toZBuf(),read_a.patFw.length());
 	out.append('\t');
 	out.append(read_a.qual.toZBuf(),read_a.qual.length());
 	if (!read_b.empty()) {
 		out.append('\t');
-		out.append(read_b.name.buf(),read_b.name.length());
+		out.append(ob_name_b,ob_name_len);
 		out.append('\t');
 		out.append(read_b.patFw.toZBuf(),read_b.patFw.length());
 		out.append('\t');
