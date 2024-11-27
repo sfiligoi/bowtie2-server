@@ -746,7 +746,6 @@ public:
 				}
 			}
 		}
-		appendReadComplete(o, staln, threadId, rd1, rd2, rdid);
 	}
 
 	/**
@@ -773,7 +772,6 @@ public:
 	{
 		append(o, staln, threadId, rd1, rd2, rdid, NULL, NULL, summ,
 		       ssm1, ssm2, flags1, flags2, prm, mapq, sc, report2);
-		appendReadComplete(o, staln, threadId, rd1, rd2, rdid);
 	}
 
 	/**

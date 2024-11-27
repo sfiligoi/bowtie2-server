@@ -2581,7 +2581,73 @@ void PatternSourceWebClient::process_read_line(
 	obuf.writeChars(dname.name_buf(),dname.name_len());
 	// we are passing any name qualifiers (e.g. /1) as-is 
 	obuf.writeChars(data_ptr,line_size-data_len); // we know this is >0, since we found a \t
+
+	// TODO: Implement passthrough
 }
+
+void PatternSourceWebClient::process_end_read(
+		PatternSourceWebClient::LockedOrigBufMap& obmap,
+		char ridx_buf[], const int ridx_size)
+{
+	if ((ridx_size!=4) && (ridx_size!=6)) { // 4==paired, 6==unpaired
+		// should never get here with a healthy server
+		fprintf(stderr, "WARNING: Malformed end line found, read index string too long (%i)\n",ridx_size);
+		// just ignore this line
+		return;
+	}
+	if ((ridx_size==6) && (ridx_buf[4]!='/') && (!((ridx_buf[5]=='1')||(ridx_buf[5]=='2')))) {
+		// should never get here with a healthy server
+		char buf[8];
+		memcpy(buf,ridx_buf,ridx_size);
+		buf[ridx_size]=0;
+		fprintf(stderr, "WARNING: Malformed end line found, paired read index malformed (%s)\n",buf);
+		// just ignore this line
+		return;
+	}
+	char *end_ptr = NULL;
+	unsigned long ridx = strtoul(ridx_buf,&end_ptr,16); // we assume it is \n terminated
+	const int data_len = end_ptr-ridx_buf;
+
+	if (data_len!=4) {
+		// should never get here with a healthy server
+		fprintf(stderr, "WARNING: Malformed end line found, not valid read index (len %i)\n",data_len);
+		// just ignore this line
+		return;
+	}
+
+	if (ridx_size==4) { // paired end of read
+		// we processed everything for this read
+		OrigBuf dname = obmap.release(uint16_t(ridx));
+		if (!dname.valid()) {
+			// should never get here with a healthy server
+			fprintf(stderr, "WARNING: Malformed paired end line found, invalid read index found\n");
+			// just ignore this line
+			return;
+		}
+	} else { // expect unpaired
+		// don't know if I have processed both ends yet, so start with a lookup
+		OrigBuf& dname = obmap.lookup(uint16_t(ridx));
+		if (!dname.valid()) {
+		char buf[8];
+		memcpy(buf,ridx_buf,ridx_size);
+		buf[ridx_size]=0;
+			// should never get here with a healthy server
+			fprintf(stderr, "WARNING: Malformed unpaired end line found, invalid read index found\n");
+			// just ignore this line
+			return;
+		}
+		const bool is_read_b = (ridx_buf[5]=='2');
+		// we could check if we already processed this read, but not really important
+		dname.remove_present(is_read_b);
+		// Now check if we are done with this one
+		if (!(dname.readaPresent || dname.readbPresent)) {
+			// processed both sides, we can release
+			obmap.release(uint16_t(ridx));
+		}
+	}
+}
+
+
 
 bool PatternSourceWebClient::process_read_buffer(
 		OutFileBuf& obuf, PatternSourceWebClient::LockedOrigBufMap& obmap,
@@ -2605,13 +2671,8 @@ bool PatternSourceWebClient::process_read_buffer(
 		if (memcmp(loop_str,"@CO END READ\t",readendlen)==0) {
 			// This tells us that we are done with this read
 			// we assume everything after up to \n is the read idx name
-			loop_str[loop_filled] = 0; // null terminate, for ease of use
 			char * const rname = loop_str+readendlen;
-			// TODO
-			// Print out, if pass-through
-			// remove from map
-			obuf.writeChars("@CO TODO\t",9);
-			obuf.writeChars(rname,nl_len-readendlen);
+			process_end_read(obmap, rname,nl_len-readendlen-1);
 		} else if (loop_str[0]=='@') {
 			// pass through all other comments as-is
 			obuf.writeChars(loop_str,nl_len);

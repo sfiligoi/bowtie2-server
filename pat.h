@@ -2259,6 +2259,14 @@ public:
 
 		bool valid() const { return readPairOrigBuf!=NULL; }
 
+		void remove_present(bool set_read_b) {
+			if (set_read_b) {
+				readbPresent = false;
+			} else {
+				readaPresent = false;
+			}
+		}
+
 		// access
 		uint32_t readOrigBuf_len() const {return readaOrigBuf_len+readbOrigBuf_len+readNameBuf_len+3;}
 
@@ -2468,10 +2476,18 @@ private:
 		}
 
 		// Retrieval API
-		// Caller responsible for ensuring idx is (still) valid
+		// Returns an invalid object, if idx invalid
 		const OrigBuf& lookup(uint16_t idx) const { 
 			std::unique_lock<std::mutex> lk(m_);
 			const OrigBuf& ob = (idx<BUF_CAPACITY) ? buf0[idx] : buf1[idx-BUF_CAPACITY];
+			return (ob.valid()) ? ob : invalid_ob; // ob may be changed after we release the lock, if it was invalid
+		}
+
+		// Returns an invalid object, if idx invalid
+		// Note: DO NOT change a returned invalid object!
+		OrigBuf& lookup(uint16_t idx) { 
+			std::unique_lock<std::mutex> lk(m_);
+			OrigBuf& ob = (idx<BUF_CAPACITY) ? buf0[idx] : buf1[idx-BUF_CAPACITY];
 			return (ob.valid()) ? ob : invalid_ob; // ob may be changed after we release the lock, if it was invalid
 		}
 
@@ -2524,7 +2540,7 @@ private:
 		uint16_t buf1_used_cnt;
 		std::array<OrigBuf,BUF_CAPACITY> buf0;
 		std::array<OrigBuf,BUF_CAPACITY> buf1;
-		const OrigBuf invalid_ob;    // fixed object that is known to be always invalid
+		OrigBuf invalid_ob;    // fixed object that is known to be always invalid
 		// the following are completely internal, and are reset at each method exit, so mutable
 		mutable std::mutex m_;
 		mutable std::condition_variable cv_;
@@ -2693,6 +2709,7 @@ private:
 	static bool find_request_terminator(const char str[]);
 
 	static void process_read_line(OutFileBuf& obuf, const LockedOrigBufMap& obmap, char line_buf[], const int line_size);
+	static void process_end_read(LockedOrigBufMap& obmap, char line_buf[], const int line_size);
 	static bool process_read_buffer(OutFileBuf& obuf, LockedOrigBufMap& obmap, char recv_str[], int& recv_filled);
 
 	static constexpr int MAX_HEADER_SIZE = 1023;

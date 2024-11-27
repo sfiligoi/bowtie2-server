@@ -843,6 +843,13 @@ void AlnSinkWrap::finishRead(
 					met.nconcord_uni2++;
 				}
 			}
+			g_->appendReadComplete(
+				obuf_,
+				staln_,
+				threadid_,
+				rd1_,
+				rd2_,
+				rdid_);
 			init_ = false;
 			g_ = NULL;
 			return;
@@ -964,6 +971,13 @@ void AlnSinkWrap::finishRead(
 				false);
 			met.nconcord_0++;
 			met.ndiscord++;
+			g_->appendReadComplete(
+				obuf_,
+				staln_,
+				threadid_,
+				rd1_,
+				rd2_,
+				rdid_);
 			init_ = false;
 			g_ = NULL;
 			return;
@@ -1381,6 +1395,13 @@ void AlnSinkWrap::finishRead(
 				true);   // get lock?
 		}
 	} // if(suppress alignments)
+	g_->appendReadComplete(
+		obuf_,
+		staln_,
+		threadid_,
+		rd1_,
+		rd2_,
+		rdid_);
 	init_ = false;
 	g_ = NULL;
 	return;
@@ -2139,10 +2160,14 @@ void AlnSinkSam::appendReadComplete(
 		if (rd1!=NULL) {
 			o.append('\t');
 			samc_.printReadName(o, rd1->name, rd2!=NULL);
-		}
-		if (rd2!=NULL) {
+			// if (rd2!=NULL), the rd1->name==rd2->name, meaning unpaired
+		} else if (rd2!=NULL) {
 			o.append('\t');
 			samc_.printReadName(o, rd2->name, rd1!=NULL);
+		} else {
+			// should never get in here, but just in case
+			o.append("\t");
+			o.append("?");
 		}
 		o.append('\n');
 	}
