@@ -2255,7 +2255,7 @@ public:
 			reset();
 		}
 
-		void saveOrigBufs(const Read& read_a, const Read& read_b);
+		void saveOrigBufs(const Read& read_a, const Read& read_b, const bool want_passthrough);
 
 		bool valid() const { return readPairOrigBuf!=NULL; }
 
@@ -2289,6 +2289,7 @@ public:
 
 	private:
 		void origbuf_alloc(uint32_t size);
+		uint32_t copyOptFieldNewlineEscaped(char * const out_buf, const char raw_buf[], uint32_t raw_len);
 
 	};
 
@@ -2348,7 +2349,7 @@ public:
 		}
 
 		// fill this buffer with tab6 data from the two reads
-		void readPair2Tab6(PatternSourceWebClient::LockedOrigBufMap& obmap, const Read& read_a, const Read& read_b);
+		void readPair2Tab6(PatternSourceWebClient::LockedOrigBufMap& obmap, const Read& read_a, const Read& read_b, const bool want_passthrough);
 
 		bool empty() { return tab6_str==NULL; }
 
@@ -2377,14 +2378,16 @@ public:
 
 	class Config {
 	public:
-		Config(const char *iname) : 
+		Config(const char *iname, bool want_passthrough_) : 
 			index_name(iname),
+			want_passthrough(want_passthrough_),
 			seedLen(0),
 			maxDpStreak(0),
 			seedRounds(0),
 			khits(-1) {}
 
 		const char *index_name;
+		bool want_passthrough;
 		int seedLen;
 		int maxDpStreak;
 		int seedRounds;
@@ -2427,7 +2430,7 @@ public:
 		if (!goodState()) return false;
 		ReadElement el(psq_empty_.pop());
 		if (goodState()) {
-			el.readPair2Tab6(obmap_,read_a,read_b);
+			el.readPair2Tab6(obmap_,read_a,read_b,config_.want_passthrough);
 			psq_send_.push(el);
 		}
 		return goodState();
@@ -2469,9 +2472,9 @@ private:
 
 		// save the origbufs and names in the map
 		// return index on how to access it
-		uint16_t saveOrigBufs(const Read& read_a, const Read& read_b) {
+		uint16_t saveOrigBufs(const Read& read_a, const Read& read_b, const bool want_passthrough) {
 			OrigBuf ob;
-			ob.saveOrigBufs(read_a, read_b);
+			ob.saveOrigBufs(read_a, read_b, want_passthrough);
 			return take_ownership(std::move(ob));
 		}
 
@@ -2708,9 +2711,9 @@ private:
 	// returns true if it finds one
 	static bool find_request_terminator(const char str[]);
 
-	static void process_read_line(OutFileBuf& obuf, const LockedOrigBufMap& obmap, char line_buf[], const int line_size);
+	static void process_read_line(OutFileBuf& obuf, const LockedOrigBufMap& obmap, char line_buf[], const int line_size, const bool want_passthrough);
 	static void process_end_read(LockedOrigBufMap& obmap, char line_buf[], const int line_size);
-	static bool process_read_buffer(OutFileBuf& obuf, LockedOrigBufMap& obmap, char recv_str[], int& recv_filled);
+	static bool process_read_buffer(OutFileBuf& obuf, LockedOrigBufMap& obmap, char recv_str[], int& recv_filled, const bool want_passthrough);
 
 	static constexpr int MAX_HEADER_SIZE = 1023;
 
