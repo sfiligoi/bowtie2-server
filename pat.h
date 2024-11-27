@@ -2696,6 +2696,9 @@ private:
 	// returns true if it finds one
 	static bool find_request_terminator(const char str[]);
 
+	static bool process_read_buffer(OutFileBuf& obuf, char recv_str[], int& recv_filled);
+	static void process_read_line(OutFileBuf& obuf, char line_buf[], const int line_size);
+
 	static constexpr int MAX_HEADER_SIZE = 1023;
 
 	static void close_socket(int fd);

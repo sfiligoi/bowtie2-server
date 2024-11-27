@@ -2515,12 +2515,85 @@ void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
 	delete[] re_buf;
 }
 
+void PatternSourceWebClient::process_read_line(OutFileBuf& obuf, char line_buf[], const int line_size) {
+	// this line starts with a index that we need to convert
+	char * const tab_ptr = (char *) memchr(line_buf,'\t',line_size);
+	if (tab_ptr==NULL) {
+		// should never get here with a healthy server
+		fprintf(stderr, "WARNING: Malformed line found, no tab\n");
+		// just pass through as-is
+		obuf.writeChars(line_buf,line_size);
+		return;
+	} 
+	// we assume everything after up to \t is the read idx name
+	const int tab_len = tab_ptr-line_buf+1;
+	if ((tab_len!=5) && (tab_len!=7)) { // 5==paired, 7==unpaired
+		// should never get here with a healthy server
+		fprintf(stderr, "WARNING: Malformed line found, read index string too long (%i)\n",tab_len);
+		// just pass through as-is
+		obuf.writeChars(line_buf,line_size);
+		return;
+	}
+	tab_ptr[0] = 0; // null terminate, for ease of use
+	char *rname = line_buf; // data idx name
+	char *dname = tab_ptr+1; // remaining data
+	// TODO: Lookup rname
+	obuf.writeChars(rname,tab_len-1);
+	obuf.writeChars("\t",1);
+	obuf.writeChars(dname,line_size-tab_len); // we know this is >0, since \n terminated
+}
+
+bool PatternSourceWebClient::process_read_buffer(OutFileBuf& obuf, char recv_str[], int& recv_filled) {
+	static constexpr int streamendlen = 20; // strlen("@CO BT2SRV All Done\n")
+	static constexpr int readendlen = 13; // strlen("@CO END READ\t"), assert(<=endlen)
+
+	char *loop_str = recv_str;
+	int loop_filled = recv_filled;
+	while (loop_filled>=streamendlen) { // else, read some more
+		if (memcmp(loop_str,"@CO BT2SRV All Done\n",streamendlen)==0) {
+			// we will ignore anything after the end string
+			recv_filled = 0;
+			return true;
+		}
+		char * const nl_ptr = (char *) memchr(loop_str,'\n',loop_filled);
+		if (nl_ptr==NULL) break; // the line is not complete, read some more
+		const int nl_len = nl_ptr-loop_str+1;
+
+		if (memcmp(loop_str,"@CO END READ\t",readendlen)==0) {
+			// This tells us that we are done with this read
+			// we assume everything after up to \n is the read idx name
+			loop_str[loop_filled] = 0; // null terminate, for ease of use
+			char * const rname = loop_str+readendlen;
+			// TODO
+			// Print out, if pass-through
+			// remove from map
+			obuf.writeChars("@CO TODO\t",9);
+			obuf.writeChars(rname,nl_len-readendlen);
+		} else if (loop_str[0]=='@') {
+			// pass through all other comments as-is
+			obuf.writeChars(loop_str,nl_len);
+		} else {
+			process_read_line(obuf, loop_str, nl_len);
+		}
+		loop_str = nl_ptr+1;
+		loop_filled-=nl_len;
+	}
+
+	if ((loop_str!=recv_str) && (loop_filled>0)) {
+		// we used only part of the buffer, move the remaining to the beginning
+		memmove(recv_str,loop_str,loop_filled);
+	}
+	recv_filled = loop_filled;
+
+	return false;
+}
+
 void PatternSourceWebClient::receiveDataWorker(PatternSourceWebClient *obj) {
 	if (!(obj->isConnected_)) return; // initialization failed, exit fast
 	OutFileBuf& obuf = obj->obuf_;
 	int fd = obj->socket_fd_;
 	const int recv_alloc = 64*1024; // use a reasonably large buffer
-	char* recv_str = new char[recv_alloc+16]; // need some space for null termination
+	char* const recv_str = new char[recv_alloc+16]; // need some space for null termination
 	int recv_filled = 0;
 	bool found_end = false;
 	while ((!found_end) && (obj->goodState())) {
@@ -2532,28 +2605,14 @@ void PatternSourceWebClient::receiveDataWorker(PatternSourceWebClient *obj) {
 		}
 		if (!obj->goodState()) break; // read is blocking, things may have changed since last check
 
-		if (cnt>0) {
-			recv_filled+=cnt;
-			constexpr int endlen = 20; // strlen("@CO BT2SRV All Done\n")
-			if (recv_filled>=endlen) {
-				recv_str[recv_filled] = 0;
-				char *end_str = strstr(recv_str,"@CO BT2SRV All Done\n");
-				if (end_str==NULL) {
-					// not finished, just pass through
-					obuf.writeChars(recv_str,recv_filled);
-				} else {
-					found_end = true;
-					// we will ignore anything after the end string
-					if (end_str!=recv_str) { // just avoid emoty strings
-						obj->obuf_.writeChars(recv_str,end_str-recv_str);
-					}
-				}
-				recv_filled = 0;
-			} // else, fill a bit more of the buffer before making a decision
-		} else {
+		if (cnt<=0) {
 			obj->hasErrors_ = true;
 			fprintf(stderr, "ERROR: Read from server failed, aborting\n");
+			break;
 		}
+
+		recv_filled+=cnt;
+		found_end = process_read_buffer(obuf, recv_str, recv_filled);
 	}
 
 	//fprintf(stderr, "INFO: Client Read done\n");
