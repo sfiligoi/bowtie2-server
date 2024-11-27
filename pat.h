@@ -2176,22 +2176,25 @@ public:
 		uint32_t readPairOrigBuf_capacity;
 		uint32_t readaOrigBuf_len; // read_a len
 		uint32_t readbOrigBuf_len; // read b len
-		// read names are appended behind the origbuf data
-		uint32_t readaNameBuf_len; // read_a len
-		uint32_t readbNameBuf_len; // read b len
+		// read name is appended behind the origbuf data
+		uint32_t readNameBuf_len;
+		bool readaPresent;
+		bool readbPresent;
 
-		// Default, empty constructor
+		// Default, empty constructor (valid()==false)
 		OrigBuf() 
 			: readPairOrigBuf(NULL), readPairOrigBuf_capacity(0)
 			, readaOrigBuf_len(0), readbOrigBuf_len(0)
-			, readaNameBuf_len(0), readbNameBuf_len(0)
+			, readNameBuf_len(0)
+			, readaPresent(false), readbPresent(false)
 		{}
 
 		// copy constructor and assignment
 		OrigBuf(const OrigBuf& other)
 			: readPairOrigBuf(NULL), readPairOrigBuf_capacity(0)
 			, readaOrigBuf_len(other.readaOrigBuf_len), readbOrigBuf_len(other.readbOrigBuf_len)
-			, readaNameBuf_len(other.readaNameBuf_len), readbNameBuf_len(other.readbNameBuf_len)
+			, readNameBuf_len(other.readNameBuf_len)
+			, readaPresent(other.readaPresent), readbPresent(other.readbPresent)
 		{
 			const uint32_t readbOrigBufPair_len = readOrigBuf_len();
 			if ((other.readPairOrigBuf!=NULL) && (readbOrigBufPair_len>0)) {
@@ -2203,8 +2206,9 @@ public:
 		OrigBuf& operator=(const OrigBuf& other) {
 			readaOrigBuf_len = other.readaOrigBuf_len;
 			readbOrigBuf_len = other.readbOrigBuf_len;
-			readaNameBuf_len = other.readaNameBuf_len;
-			readbNameBuf_len = other.readbNameBuf_len;
+			readNameBuf_len = other.readNameBuf_len;
+			readaPresent = other.readaPresent;
+			readbPresent = other.readbPresent;
 			const uint32_t readbOrigBufPair_len = readOrigBuf_len();
 			if ((other.readPairOrigBuf!=NULL) && (readbOrigBufPair_len>0)) {
 				origbuf_alloc(readbOrigBufPair_len);
@@ -2218,7 +2222,8 @@ public:
 		OrigBuf(OrigBuf&& other)
 			: readPairOrigBuf(std::exchange(other.readPairOrigBuf,(char*)NULL)), readPairOrigBuf_capacity(std::exchange(other.readPairOrigBuf_capacity,0))
 			, readaOrigBuf_len(std::exchange(other.readaOrigBuf_len,0)), readbOrigBuf_len(std::exchange(other.readbOrigBuf_len,0))
-			, readaNameBuf_len(std::exchange(other.readaNameBuf_len,0)), readbNameBuf_len(std::exchange(other.readbNameBuf_len,0))
+			, readNameBuf_len(std::exchange(other.readNameBuf_len,0))
+			, readaPresent(std::exchange(other.readaPresent,false)), readbPresent(std::exchange(other.readbPresent,false))
 		{
 		}
 
@@ -2227,8 +2232,9 @@ public:
 			readPairOrigBuf_capacity = std::exchange(other.readPairOrigBuf_capacity,0);
 			readaOrigBuf_len = std::exchange(other.readaOrigBuf_len,0);
 			readbOrigBuf_len = std::exchange(other.readbOrigBuf_len,0);
-			readaNameBuf_len = std::exchange(other.readaNameBuf_len,0);
-			readbNameBuf_len = std::exchange(other.readbNameBuf_len,0);
+			readNameBuf_len = std::exchange(other.readNameBuf_len,0);
+			readaPresent = std::exchange(other.readaPresent,false);
+			readbPresent = std::exchange(other.readbPresent,false);
 
 			return *this;
 		}
@@ -2240,8 +2246,9 @@ public:
 			readPairOrigBuf_capacity = 0;
 			readaOrigBuf_len = 0;
 			readbOrigBuf_len = 0;
-			readaNameBuf_len = 0;
-			readbNameBuf_len = 0;
+			readNameBuf_len = 0;
+			readaPresent = false;
+			readbPresent = false;
 		}
 
 		~OrigBuf() {
@@ -2250,17 +2257,18 @@ public:
 
 		void saveOrigBufs(const Read& read_a, const Read& read_b);
 
-		// access
-		uint32_t readOrigBuf_len() const {return readaOrigBuf_len+readbOrigBuf_len+readaNameBuf_len+readbNameBuf_len+4;}
+		bool valid() const { return readPairOrigBuf!=NULL; }
 
-		const char *name_buf(bool get_read_b) const {
+		// access
+		uint32_t readOrigBuf_len() const {return readaOrigBuf_len+readbOrigBuf_len+readNameBuf_len+3;}
+
+		const char *name_buf() const {
 			if (readPairOrigBuf==NULL) return NULL;
 			uint32_t off = readaOrigBuf_len+readbOrigBuf_len+2;
-			if (get_read_b) off += readaNameBuf_len+1;
 			return readPairOrigBuf+off;
 		}
 
-		uint32_t name_len(bool get_read_b) const { return get_read_b? readbNameBuf_len : readaNameBuf_len;}
+		uint32_t name_len() const { return readNameBuf_len;}
 
 		const char *orig_buf(bool get_read_b) const {
 			if (readPairOrigBuf==NULL) return NULL;
@@ -2282,14 +2290,10 @@ public:
 		char    *tab6_str;
 		uint32_t tab6_capacity;
 		uint32_t tab6_len;
-
-		// For remembering the exact input text used to define the read pair
-		OrigBuf readPairOrigBuf;
  
 	public:
 		ReadElement() 
 			: tab6_str(NULL), tab6_capacity(0), tab6_len(0)
-			, readPairOrigBuf()
 		{}
 
 		~ReadElement() {
@@ -2298,7 +2302,6 @@ public:
 
 		ReadElement(const ReadElement& other)
 			: tab6_str(NULL), tab6_capacity(0), tab6_len(other.tab6_len) 
-			, readPairOrigBuf(other.readPairOrigBuf)
 		{
 			if (tab6_len>0) {
 				// alloc only what we need, even if other buf was much larger for historical reasons
@@ -2320,14 +2323,12 @@ public:
                                 // since tab6_str==NULL is special, make sure mine is not null, either
                                 tab6_alloc(1);
                         }
-			readPairOrigBuf = other.readPairOrigBuf;
 
 			return *this;
 		}
 
 		ReadElement(ReadElement&& other)
 			: tab6_str(std::exchange(other.tab6_str,(char*)NULL)), tab6_capacity(std::exchange(other.tab6_capacity,0)), tab6_len(std::exchange(other.tab6_len,0)) 
-			, readPairOrigBuf(std::move(other.readPairOrigBuf))
 		{
 		}
 
@@ -2335,7 +2336,6 @@ public:
 			tab6_str = std::exchange(other.tab6_str,(char*)NULL);
 			tab6_capacity= std::exchange(other.tab6_capacity,0);
 			tab6_len = std::exchange(other.tab6_len,0);
-			readPairOrigBuf = std::move(other.readPairOrigBuf);
 			return *this;
 		}
 
@@ -2347,12 +2347,6 @@ public:
 		char *buf() { return tab6_str; }
 		const char *buf() const { return tab6_str; }
 		uint32_t buf_len() const { return tab6_len; }
-
-		const char *name_buf(bool get_read_b) const { return readPairOrigBuf.name_buf(get_read_b); }
-		uint32_t name_len(bool get_read_b) const { return readPairOrigBuf.name_len(get_read_b); }
-
-		const char *orig_buf(bool get_read_b) const { return readPairOrigBuf.orig_buf(get_read_b); }
-		uint32_t orig_len(bool get_read_b) const { return readPairOrigBuf.orig_len(get_read_b); }
 
 		// =======================
 		// mostly for internal use
@@ -2368,7 +2362,6 @@ public:
 			tab6_str = NULL;
 			tab6_capacity=0;
 			tab6_len=0;
-			readPairOrigBuf.reset();
 		}
 	private:
 		void tab6_alloc(uint32_t size);
@@ -2477,8 +2470,9 @@ private:
 		// Retrieval API
 		// Caller responsible for ensuring idx is (still) valid
 		const OrigBuf& lookup(uint16_t idx) const { 
-			// no locking needed
-			return (idx<BUF_CAPACITY) ? buf0[idx] : buf1[idx-BUF_CAPACITY]; 
+			std::unique_lock<std::mutex> lk(m_);
+			const OrigBuf& ob = (idx<BUF_CAPACITY) ? buf0[idx] : buf1[idx-BUF_CAPACITY];
+			return (ob.valid()) ? ob : invalid_ob; // ob may be changed after we release the lock, if it was invalid
 		}
 
 		OrigBuf release(uint16_t idx) {
@@ -2530,8 +2524,10 @@ private:
 		uint16_t buf1_used_cnt;
 		std::array<OrigBuf,BUF_CAPACITY> buf0;
 		std::array<OrigBuf,BUF_CAPACITY> buf1;
-		std::mutex m_;
-		std::condition_variable cv_;
+		const OrigBuf invalid_ob;    // fixed object that is known to be always invalid
+		// the following are completely internal, and are reset at each method exit, so mutable
+		mutable std::mutex m_;
+		mutable std::condition_variable cv_;
 	};
 
 	template <typename T>
@@ -2696,8 +2692,8 @@ private:
 	// returns true if it finds one
 	static bool find_request_terminator(const char str[]);
 
-	static bool process_read_buffer(OutFileBuf& obuf, char recv_str[], int& recv_filled);
-	static void process_read_line(OutFileBuf& obuf, char line_buf[], const int line_size);
+	static void process_read_line(OutFileBuf& obuf, const LockedOrigBufMap& obmap, char line_buf[], const int line_size);
+	static bool process_read_buffer(OutFileBuf& obuf, LockedOrigBufMap& obmap, char recv_str[], int& recv_filled);
 
 	static constexpr int MAX_HEADER_SIZE = 1023;
 
