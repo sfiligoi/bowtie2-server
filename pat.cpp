@@ -39,6 +39,7 @@
 #include "tokenize.h"
 #include "endian_swap.h"
 #include "aln_sink.h"
+#include "sam.h"
 
 using namespace std;
 
@@ -2626,17 +2627,18 @@ void PatternSourceWebClient::process_read_line(
 	obuf.writeChars(data_ptr,line_size-data_len); // we know this is >0, since we found a \t
 
 	if (want_passthrough) {
-		if ( (tab_len==4) || (line_buf[5]=='1')) {
-			// print reada
-			const char *orig_buf = dname.orig_buf(false);
-			const uint32_t orig_len = dname.orig_len(false);
-			obuf.writeChars(orig_buf,orig_len);
-			obuf.writeChars("\n",1);
+		bool isReadB = false; // by default we assume it is reada
+
+		char *t2_ptr = NULL;
+		unsigned long flags = strtoul(tab_ptr+1,&t2_ptr,10);
+		bool isPaired = (flags & SAM_FLAG_PAIRED)!=0;
+		if (isPaired) {
+			isReadB = (flags & SAM_FLAG_SECOND_IN_PAIR)!=0;
 		}
-		if ( (tab_len==4) || (line_buf[5]=='2')) {
-			// print readb
-			const char *orig_buf = dname.orig_buf(true);
-			const uint32_t orig_len = dname.orig_len(true);
+		{
+			// print appropriate origBuf
+			const char *orig_buf = dname.orig_buf(isReadB);
+			const uint32_t orig_len = dname.orig_len(isReadB);
 			obuf.writeChars(orig_buf,orig_len);
 			obuf.writeChars("\n",1);
 		}
