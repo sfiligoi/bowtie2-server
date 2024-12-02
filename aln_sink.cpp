@@ -843,6 +843,13 @@ void AlnSinkWrap::finishRead(
 					met.nconcord_uni2++;
 				}
 			}
+			g_->appendReadComplete(
+				obuf_,
+				staln_,
+				threadid_,
+				rd1_,
+				rd2_,
+				rdid_);
 			init_ = false;
 			g_ = NULL;
 			return;
@@ -964,6 +971,13 @@ void AlnSinkWrap::finishRead(
 				false);
 			met.nconcord_0++;
 			met.ndiscord++;
+			g_->appendReadComplete(
+				obuf_,
+				staln_,
+				threadid_,
+				rd1_,
+				rd2_,
+				rdid_);
 			init_ = false;
 			g_ = NULL;
 			return;
@@ -1381,6 +1395,13 @@ void AlnSinkWrap::finishRead(
 				true);   // get lock?
 		}
 	} // if(suppress alignments)
+	g_->appendReadComplete(
+		obuf_,
+		staln_,
+		threadid_,
+		rd1_,
+		rd2_,
+		rdid_);
 	init_ = false;
 	g_ = NULL;
 	return;
@@ -2124,6 +2145,33 @@ void AlnSinkSam::appendMate(
 		o.append('\n');
 	}
 
+}
+
+void AlnSinkSam::appendReadComplete(
+	BTString&             o,
+	StackedAln&           staln,
+	size_t                threadId,
+	const Read           *rd1,
+	const Read           *rd2,
+	const TReadId         rdid)
+{
+	if (sendReadComplete_) {
+		o.append("@CO END READ");
+		if (rd1!=NULL) {
+			o.append('\t');
+			samc_.printReadName(o, rd1->name, rd2!=NULL);
+			// if (rd2!=NULL), the rd1->name==rd2->name, meaning unpaired
+		} else if (rd2!=NULL) {
+			o.append('\t');
+			samc_.printReadName(o, rd2->name, rd1!=NULL);
+		} else {
+			// should never get in here, but just in case
+			o.append("\t");
+			o.append("?");
+		}
+		o.append('\n');
+	}
+	// nothing to do, else
 }
 
 #ifdef ALN_SINK_MAIN

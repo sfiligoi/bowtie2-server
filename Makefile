@@ -30,7 +30,7 @@ HEADERS := $(wildcard *.h)
 BOWTIE_MM := 1
 BOWTIE_SHARED_MEM :=
 
-CXXFLAGS += -std=c++11 -Wall -Wno-unused-but-set-variable
+CXXFLAGS += -std=c++14 -Wall -Wno-unused-but-set-variable
 
 SRA_TOOLS_VER ?= 3.0.9
 VDB_VER ?= 3.0.9

@@ -39,6 +39,7 @@
 #include "tokenize.h"
 #include "endian_swap.h"
 #include "aln_sink.h"
+#include "sam.h"
 
 using namespace std;
 
@@ -2032,6 +2033,7 @@ bool PatternSourceServiceFactory::align(int fd, long int data_size) {
                 readsPerBatch,                   // size of output buffer of reads
                 0); // no reason to skip reads
 	AlnSinkSam msink(template_msink_, oq);
+	msink.sendReadComplete();
 
 	EList<PatternSource*>* comp_params  = new EList<PatternSource*>();
 	auto *ps = new TabbedSocketPatternSource(pp_, fd, data_size, &msink);
@@ -2216,46 +2218,153 @@ void tooManyQualities(const BTString& read_name) {
 
 // ================== PatternSourceWebClient
 
-void PatternSourceWebClient::ReadElement::clear_and_alloc(size_t size) {
-	if  (capacity<size) {
+void PatternSourceWebClient::ReadElement::tab6_alloc(uint32_t size) {
+	if  (tab6_capacity<size) {
 		if (tab6_str!=NULL) delete[] tab6_str;
 		tab6_str = new char[size];
-		capacity = size;
+		tab6_capacity = size;
 	} // else, reuse the same buffer
-	len = 0;
 }
 
-void PatternSourceWebClient::ReadElement::append(const char *str, size_t str_len) {
-	assert((len+str_len)<=capacity);
-	memcpy(tab6_str+len,str,str_len);
-	len+=str_len;
+void PatternSourceWebClient::ReadElement::clear_and_alloc(uint32_t size) {
+	tab6_alloc(size);
+	tab6_len = 0;
 }
 
+// assumes the buffer is already allocated and large enough
+void PatternSourceWebClient::ReadElement::append(const char *str, uint32_t str_len) {
+	assert((tab6_len+str_len)<=tab6_capacity);
+	memcpy(tab6_str+tab6_len,str,str_len);
+	tab6_len+=str_len;
+}
+
+// assumes the buffer is already allocated and large enough
 void PatternSourceWebClient::ReadElement::append(const char chr) {
-	assert(len<capacity);
-	tab6_str[len] = chr;
-	len++;
+	assert(tab6_len<tab6_capacity);
+	tab6_str[tab6_len] = chr;
+	tab6_len++;
+}
+
+void PatternSourceWebClient::OrigBuf::origbuf_alloc(uint32_t size) {
+	if  (readPairOrigBuf_capacity<size) {
+		if (readPairOrigBuf!=NULL) delete[] readPairOrigBuf;
+		readPairOrigBuf = new char[size];
+		readPairOrigBuf_capacity = size;
+	} // else, reuse the same buffer
+}
+
+// equivalent of  SamConfig::printOptFieldNewlineEscapedZ
+// if out_buf == NULL, just compute the len
+uint32_t PatternSourceWebClient::OrigBuf::copyOptFieldNewlineEscaped(char * const out_buf, const char raw_buf[], uint32_t raw_len) {
+	uint32_t out_len = 0;
+	for(uint32_t i = 0; i < raw_len; i++) {
+		const int s = raw_buf[i];
+		if(s == 10 || s == 13 || s == '%') {
+			// percent-encode it
+			if (out_buf!=NULL) {
+				out_buf[out_len]='%';
+				out_len++;
+				int ms = s >> 4;
+				int ls = s & 15;
+				assert_range(0, 15, ms);
+				assert_range(0, 15, ls);
+				out_buf[out_len]="0123456789ABCDEF"[ms];
+				out_len++;
+				out_buf[out_len]="0123456789ABCDEF"[ls];
+			} else {
+				out_len+=2; // just increment length
+			}
+
+		} else {
+			if (out_buf!=NULL) out_buf[out_len]=s;
+		}
+		out_len++;
+	}
+	return out_len;
+}
+
+void PatternSourceWebClient::OrigBuf::saveOrigBufs(const Read& read_a, const Read& read_b, const bool want_passthrough) {
+	// no need to save readOrigBuf if we do not need passthrough
+	readaOrigBuf_len = want_passthrough ? copyOptFieldNewlineEscaped(NULL, read_a.readOrigBuf.buf(), read_a.readOrigBuf.length()) : 0;
+	if ((read_a.name.length()<3) || (memcmp(read_a.name.buf()+read_a.name.length()-2,"/1",2)!=0)) {
+		// should never happen, just warn if it does
+		fprintf(stderr, "WARNING: Read name does not end in /1! Results likely invalid\n");
+		// we still need something, so just use all of it
+		readNameBuf_len = read_a.name.length();
+	} else {
+		// do not save the final /1
+		readNameBuf_len = read_a.name.length()-2;
+	}
+	readaPresent = true;
+
+	if (read_b.empty()) {
+		readbOrigBuf_len = 0;
+		readbPresent = false;
+	} else {
+		readbOrigBuf_len = want_passthrough ? copyOptFieldNewlineEscaped(NULL, read_b.readOrigBuf.buf(), read_b.readOrigBuf.length()) : 0;
+		readbPresent = true;
+		if ((read_a.name.length()!=read_b.name.length()) || (read_b.name.length()<3)) {
+			// should never happen, just warn if it does
+			fprintf(stderr, "WARNING: Paired reads do not have the same name length! Results likely invalid\n");
+		} else if (memcmp(read_a.name.buf(),read_b.name.buf(),read_b.name.length()-2)!=0) {
+			// should never happen, just warn if it does
+			fprintf(stderr, "WARNING: Paired reads do not have the same name! Results likely invalid\n");
+		} else if (memcmp(read_b.name.buf()+read_b.name.length()-2,"/2",2)!=0) {
+			// should never happen, just warn if it does
+			fprintf(stderr, "WARNING: Read2 name does not end in /2! Results likely invalid\n");
+		}
+	}
+
+	const uint32_t readOrigBufPair_len = readOrigBuf_len();
+	assert(readOrigBufPair_len == (readaOrigBuf_len+readbOrigBuf_len+readNameBuf_len+3));
+	if (readOrigBufPair_len>0) {
+		origbuf_alloc(readOrigBufPair_len);
+		uint32_t off = 0;
+		if (readaOrigBuf_len>0) copyOptFieldNewlineEscaped(readPairOrigBuf+off, read_a.readOrigBuf.buf(), read_a.readOrigBuf.length());
+		off += readaOrigBuf_len;
+		readPairOrigBuf[off] = 0; // null terminate, for ease of use
+		off++;
+		if (readbOrigBuf_len>0) copyOptFieldNewlineEscaped(readPairOrigBuf+off, read_b.readOrigBuf.buf(), read_b.readOrigBuf.length());
+		off += readbOrigBuf_len;
+		readPairOrigBuf[off] = 0; // null terminate, for ease of use
+		off++;
+		if (readNameBuf_len>0) memcpy(readPairOrigBuf+off, read_a.name.buf(),readNameBuf_len);
+		off += readNameBuf_len;
+		readPairOrigBuf[off] = 0; // null terminate, for ease of use
+		off++;
+	}
 }
 
 // Returns a new string in tab6 format
 // Caller gets ownership of the pointer
 // Note that the returned size does not include the terminating null character
-void PatternSourceWebClient::ReadElement::readPair2Tab6(const Read& read_a, const Read& read_b) {
-	size_t total_len = read_a.name.length()+1+read_a.patFw.length()+1+read_a.qual.length();
+void PatternSourceWebClient::ReadElement::readPair2Tab6(PatternSourceWebClient::LockedOrigBufMap& obmap, const Read& read_a, const Read& read_b, const bool want_passthrough) {
+	// save the original names and origbuf
+	const int ob_idx = obmap.saveOrigBufs(read_a,read_b,want_passthrough);
+	constexpr uint32_t ob_name_len = 6;
+	char ob_name_a[8];
+	char ob_name_b[8];
+	sprintf(ob_name_a, "%04X/1", ob_idx);
+	sprintf(ob_name_b, "%04X/2", ob_idx);
+
+	// send only the index to the server
+	uint32_t total_len = ob_name_len+1+read_a.patFw.length()+1+read_a.qual.length();
+	//fprintf(stderr, "read_a '%s' %s'\n",read_a.name.toZBuf(), ob_name_a);
 	if (!read_b.empty()) {
 		// paired
-		total_len += 1+read_b.name.length()+1+read_b.patFw.length()+1+read_b.qual.length();
+		total_len += 1+ob_name_len+1+read_b.patFw.length()+1+read_b.qual.length();
+		//fprintf(stderr, "read_ab '%s' %s'\n",read_b.name.toZBuf(), ob_name_b);
 	}
 	ReadElement& out = *this;
 	out.clear_and_alloc(total_len+1);
-	out.append(read_a.name.buf(),read_a.name.length());
+	out.append(ob_name_a,ob_name_len);
 	out.append('\t');
 	out.append(read_a.patFw.toZBuf(),read_a.patFw.length());
 	out.append('\t');
 	out.append(read_a.qual.toZBuf(),read_a.qual.length());
 	if (!read_b.empty()) {
 		out.append('\t');
-		out.append(read_b.name.buf(),read_b.name.length());
+		out.append(ob_name_b,ob_name_len);
 		out.append('\t');
 		out.append(read_b.patFw.toZBuf(),read_b.patFw.length());
 		out.append('\t');
@@ -2390,10 +2499,10 @@ void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
 		psq_send.popUpToN(RE_PER_PACKET, re_buf, n_re);
 		if (!obj->goodState()) break; // pop is blocking, things may have changed since last check
 
-		// let's see how much space wee need
+		// let's see how much space we need
 		int re_len = 0;
 		for (int i=0; i<n_re; i++) {
-			re_len += re_buf[i].len+1;
+			re_len += re_buf[i].buf_len()+1;
 		}
 		if ((re_len+4)>send_alloc) { // add some slack at the end for write_chunked_str()
 			// we need more
@@ -2408,8 +2517,9 @@ void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
 				// finalize() put this in to signal we are done
 				found_null = true;
 			} else {
-				memcpy(send_str+re_len, re_buf[i].buf(), re_buf[i].len);
-				re_len += re_buf[i].len;
+				const auto buf_len = re_buf[i].buf_len();
+				memcpy(send_str+re_len, re_buf[i].buf(), buf_len);
+				re_len += buf_len;
 				send_str[re_len] = '\n';
 				re_len += 1;
 			}
@@ -2457,12 +2567,200 @@ void PatternSourceWebClient::sendDataWorker(PatternSourceWebClient *obj) {
 	delete[] re_buf;
 }
 
+void PatternSourceWebClient::process_read_line(
+		OutFileBuf& obuf, const PatternSourceWebClient::LockedOrigBufMap& obmap,
+		char line_buf[], const int line_size,
+		const bool want_passthrough)
+{
+	// this line starts with a index that we need to convert
+	char * const tab_ptr = (char *) memchr(line_buf,'\t',line_size);
+	if (tab_ptr==NULL) {
+		// should never get here with a healthy server
+		fprintf(stderr, "WARNING: Malformed line found, no tab\n");
+		// just pass through as-is
+		obuf.writeChars(line_buf,line_size);
+		return;
+	} 
+	// we assume everything after up to \t is the read idx name
+	const int tab_len = tab_ptr-line_buf;
+	if ((tab_len!=4) && (tab_len!=6)) { // 4==paired, 6==unpaired
+		// should never get here with a healthy server
+		fprintf(stderr, "WARNING: Malformed line found, read index string too long (%i)\n",tab_len);
+		// just pass through as-is
+		obuf.writeChars(line_buf,line_size);
+		return;
+	}
+
+	if ((tab_len==6) && (line_buf[4]!='/')) {
+		// should never get here with a healthy server
+		fprintf(stderr, "WARNING: Malformed line found, invalid paired read index string\n");
+		// just pass through as-is
+		obuf.writeChars(line_buf,line_size);
+		return;
+	}
+
+	char *data_ptr = NULL;
+	unsigned long ridx = strtoul(line_buf,&data_ptr,16); // no need to 0-terminate line_buf, will stop at \t
+	const int data_len = data_ptr-line_buf;
+
+	if (data_len!=4) {
+		// should never get here with a healthy server
+		fprintf(stderr, "WARNING: Malformed line found, not valid read index (len %i)\n",data_len);
+		// just pass through as-is
+		obuf.writeChars(line_buf,line_size);
+		return;
+	}
+
+	const OrigBuf& dname = obmap.lookup(uint16_t(ridx));
+	if (!dname.valid()) {
+		// should never get here with a healthy server
+		fprintf(stderr, "WARNING: Malformed line found, invalid read index found\n");
+		// just pass through as-is
+		obuf.writeChars(line_buf,line_size);
+		return;
+	}
+
+	// TODO: Implement !passthrough filtering
+
+	obuf.writeChars(dname.name_buf(),dname.name_len());
+	// we are passing any name qualifiers (e.g. /1) as-is 
+	obuf.writeChars(data_ptr,line_size-data_len); // we know this is >0, since we found a \t
+
+	if (want_passthrough) {
+		bool isReadB = false; // by default we assume it is reada
+
+		char *t2_ptr = NULL;
+		unsigned long flags = strtoul(tab_ptr+1,&t2_ptr,10);
+		bool isPaired = (flags & SAM_FLAG_PAIRED)!=0;
+		if (isPaired) {
+			isReadB = (flags & SAM_FLAG_SECOND_IN_PAIR)!=0;
+		}
+		{
+			// print appropriate origBuf
+			const char *orig_buf = dname.orig_buf(isReadB);
+			const uint32_t orig_len = dname.orig_len(isReadB);
+			obuf.writeChars(orig_buf,orig_len);
+			obuf.writeChars("\n",1);
+		}
+	}
+}
+
+void PatternSourceWebClient::process_end_read(
+		PatternSourceWebClient::LockedOrigBufMap& obmap,
+		char ridx_buf[], const int ridx_size)
+{
+	if ((ridx_size!=4) && (ridx_size!=6)) { // 4==paired, 6==unpaired
+		// should never get here with a healthy server
+		fprintf(stderr, "WARNING: Malformed end line found, read index string too long (%i)\n",ridx_size);
+		// just ignore this line
+		return;
+	}
+	if ((ridx_size==6) && (ridx_buf[4]!='/') && (!((ridx_buf[5]=='1')||(ridx_buf[5]=='2')))) {
+		// should never get here with a healthy server
+		char buf[8];
+		memcpy(buf,ridx_buf,ridx_size);
+		buf[ridx_size]=0;
+		fprintf(stderr, "WARNING: Malformed end line found, paired read index malformed (%s)\n",buf);
+		// just ignore this line
+		return;
+	}
+	char *end_ptr = NULL;
+	unsigned long ridx = strtoul(ridx_buf,&end_ptr,16); // we assume it is \n terminated
+	const int data_len = end_ptr-ridx_buf;
+
+	if (data_len!=4) {
+		// should never get here with a healthy server
+		fprintf(stderr, "WARNING: Malformed end line found, not valid read index (len %i)\n",data_len);
+		// just ignore this line
+		return;
+	}
+
+	if (ridx_size==4) { // paired end of read
+		// we processed everything for this read
+		OrigBuf dname = obmap.release(uint16_t(ridx));
+		if (!dname.valid()) {
+			// should never get here with a healthy server
+			fprintf(stderr, "WARNING: Malformed paired end line found, invalid read index found\n");
+			// just ignore this line
+			return;
+		}
+	} else { // expect unpaired
+		// don't know if I have processed both ends yet, so start with a lookup
+		OrigBuf& dname = obmap.lookup(uint16_t(ridx));
+		if (!dname.valid()) {
+		char buf[8];
+		memcpy(buf,ridx_buf,ridx_size);
+		buf[ridx_size]=0;
+			// should never get here with a healthy server
+			fprintf(stderr, "WARNING: Malformed unpaired end line found, invalid read index found\n");
+			// just ignore this line
+			return;
+		}
+		const bool is_read_b = (ridx_buf[5]=='2');
+		// we could check if we already processed this read, but not really important
+		dname.remove_present(is_read_b);
+		// Now check if we are done with this one
+		if (!(dname.readaPresent || dname.readbPresent)) {
+			// processed both sides, we can release
+			obmap.release(uint16_t(ridx));
+		}
+	}
+}
+
+
+
+bool PatternSourceWebClient::process_read_buffer(
+		OutFileBuf& obuf, PatternSourceWebClient::LockedOrigBufMap& obmap,
+		char recv_str[], int& recv_filled,
+		const bool want_passthrough)
+{
+	static constexpr int streamendlen = 20; // strlen("@CO BT2SRV All Done\n")
+	static constexpr int readendlen = 13; // strlen("@CO END READ\t"), assert(<=endlen)
+
+	char *loop_str = recv_str;
+	int loop_filled = recv_filled;
+	while (loop_filled>=streamendlen) { // else, read some more
+		if (memcmp(loop_str,"@CO BT2SRV All Done\n",streamendlen)==0) {
+			// we will ignore anything after the end string
+			recv_filled = 0;
+			return true;
+		}
+		char * const nl_ptr = (char *) memchr(loop_str,'\n',loop_filled);
+		if (nl_ptr==NULL) break; // the line is not complete, read some more
+		const int nl_len = nl_ptr-loop_str+1;
+
+		if (memcmp(loop_str,"@CO END READ\t",readendlen)==0) {
+			// This tells us that we are done with this read
+			// we assume everything after up to \n is the read idx name
+			char * const rname = loop_str+readendlen;
+			process_end_read(obmap, rname,nl_len-readendlen-1);
+		} else if (loop_str[0]=='@') {
+			// pass through all other comments as-is
+			obuf.writeChars(loop_str,nl_len);
+		} else {
+			process_read_line(obuf, obmap, loop_str, nl_len, want_passthrough);
+		}
+		loop_str = nl_ptr+1;
+		loop_filled-=nl_len;
+	}
+
+	if ((loop_str!=recv_str) && (loop_filled>0)) {
+		// we used only part of the buffer, move the remaining to the beginning
+		memmove(recv_str,loop_str,loop_filled);
+	}
+	recv_filled = loop_filled;
+
+	return false;
+}
+
 void PatternSourceWebClient::receiveDataWorker(PatternSourceWebClient *obj) {
 	if (!(obj->isConnected_)) return; // initialization failed, exit fast
+	const bool want_passthrough = obj->config_.want_passthrough;
 	OutFileBuf& obuf = obj->obuf_;
+	LockedOrigBufMap& obmap = obj->obmap_;
 	int fd = obj->socket_fd_;
 	const int recv_alloc = 64*1024; // use a reasonably large buffer
-	char* recv_str = new char[recv_alloc+16]; // need some space for null termination
+	char* const recv_str = new char[recv_alloc+16]; // need some space for null termination
 	int recv_filled = 0;
 	bool found_end = false;
 	while ((!found_end) && (obj->goodState())) {
@@ -2474,28 +2772,14 @@ void PatternSourceWebClient::receiveDataWorker(PatternSourceWebClient *obj) {
 		}
 		if (!obj->goodState()) break; // read is blocking, things may have changed since last check
 
-		if (cnt>0) {
-			recv_filled+=cnt;
-			constexpr int endlen = 20; // strlen("@CO BT2SRV All Done\n")
-			if (recv_filled>=endlen) {
-				recv_str[recv_filled] = 0;
-				char *end_str = strstr(recv_str,"@CO BT2SRV All Done\n");
-				if (end_str==NULL) {
-					// not finished, just pass through
-					obuf.writeChars(recv_str,recv_filled);
-				} else {
-					found_end = true;
-					// we will ignore anything after the end string
-					if (end_str!=recv_str) { // just avoid emoty strings
-						obj->obuf_.writeChars(recv_str,end_str-recv_str);
-					}
-				}
-				recv_filled = 0;
-			} // else, fill a bit more of the buffer before making a decision
-		} else {
+		if (cnt<=0) {
 			obj->hasErrors_ = true;
 			fprintf(stderr, "ERROR: Read from server failed, aborting\n");
+			break;
 		}
+
+		recv_filled+=cnt;
+		found_end = process_read_buffer(obuf, obmap, recv_str, recv_filled, want_passthrough);
 	}
 
 	//fprintf(stderr, "INFO: Client Read done\n");

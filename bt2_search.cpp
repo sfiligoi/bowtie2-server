@@ -4562,7 +4562,7 @@ static void webLoadWorker(void *vp) {
 	try {
 		// we want it slightly larger the internal buffer, but more does not hurt
 		const int n_writecache = 2*PatternSourceWebClient::RE_PER_PACKET;
-		PatternSourceWebClient::Config config(multiseedIndexName.c_str());
+		PatternSourceWebClient::Config config(multiseedIndexName.c_str(), sam_print_xr);
 		PatternSourceWebClient cobj(multiseedServerHostname.c_str(), multiseedServerPort, *samOfb, config, n_writecache);
 		if (!cobj.goodState()) {
 			fprintf(stderr, "ERROR: Failed to connect to %s:%i!\n",multiseedServerHostname.c_str(),multiseedServerPort);

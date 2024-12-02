@@ -34,6 +34,7 @@
 #include <map>
 #include <queue>
 #include <atomic>
+#include <utility>
 #include "alphabet.h"
 #include "assert_helpers.h"
 #include "random_source.h"
@@ -697,11 +698,11 @@ protected:
 		bytes_read = 0;
 		// read the length
 		long int len = read_buf_len();
-		// fprintf(stderr, "Buf len: %i\n",int(len));
+		//fprintf(stderr, "Buf len: %i\n",int(len));
 		// avoid very large buffers, too
 		if ((len<0) || (len>999999)) { // len==0 means end of data, so treat same as error (TODO: improve)
-			fprintf(stderr,"WARN: Chunk too large, aborting request!\n");
-			// we know the buffer is at least one by long
+			if (len>=0) fprintf(stderr,"WARN: Chunk too large, aborting request!\n");
+			// we know the buffer is at least one byte long
 			buf_[0] = EOF;
 			max_bytes_ = 1;
 			return;
@@ -2165,63 +2166,228 @@ private:
 // not a real PatternSource, but it is convenient to keep client and server in the same source file
 class PatternSourceWebClient {
 private:
+	class LockedOrigBufMap;
 	class LockedIdleQueueCV;
 public:
-	class ReadElement {
-	private:
-		char    *tab6_str;
-		uint32_t capacity;
+	// For remembering the exact input text used to define the read pair
+	class OrigBuf {
 	public:
-		ReadElement() : tab6_str(NULL), capacity(0), len(0) {}
-		~ReadElement() {
-			//if (tab6_str!=NULL) delete[] tab6_str;
+		char    *readPairOrigBuf;
+		uint32_t readPairOrigBuf_capacity;
+		uint32_t readaOrigBuf_len; // read_a len
+		uint32_t readbOrigBuf_len; // read b len
+		// read name is appended behind the origbuf data
+		uint32_t readNameBuf_len;
+		bool readaPresent;
+		bool readbPresent;
+
+		// Default, empty constructor (valid()==false)
+		OrigBuf() 
+			: readPairOrigBuf(NULL), readPairOrigBuf_capacity(0)
+			, readaOrigBuf_len(0), readbOrigBuf_len(0)
+			, readNameBuf_len(0)
+			, readaPresent(false), readbPresent(false)
+		{}
+
+		// copy constructor and assignment
+		OrigBuf(const OrigBuf& other)
+			: readPairOrigBuf(NULL), readPairOrigBuf_capacity(0)
+			, readaOrigBuf_len(other.readaOrigBuf_len), readbOrigBuf_len(other.readbOrigBuf_len)
+			, readNameBuf_len(other.readNameBuf_len)
+			, readaPresent(other.readaPresent), readbPresent(other.readbPresent)
+		{
+			const uint32_t readbOrigBufPair_len = readOrigBuf_len();
+			if ((other.readPairOrigBuf!=NULL) && (readbOrigBufPair_len>0)) {
+				origbuf_alloc(readbOrigBufPair_len);
+				memcpy(readPairOrigBuf,other.readPairOrigBuf,readbOrigBufPair_len);
+			}
 		}
 
-		ReadElement(const ReadElement& other) = default;
-		ReadElement& operator=(const ReadElement& other) = default;
+		OrigBuf& operator=(const OrigBuf& other) {
+			readaOrigBuf_len = other.readaOrigBuf_len;
+			readbOrigBuf_len = other.readbOrigBuf_len;
+			readNameBuf_len = other.readNameBuf_len;
+			readaPresent = other.readaPresent;
+			readbPresent = other.readbPresent;
+			const uint32_t readbOrigBufPair_len = readOrigBuf_len();
+			if ((other.readPairOrigBuf!=NULL) && (readbOrigBufPair_len>0)) {
+				origbuf_alloc(readbOrigBufPair_len);
+				memcpy(readPairOrigBuf,other.readPairOrigBuf,readbOrigBufPair_len);
+			}
 
-		ReadElement(ReadElement&& other) {
-			tab6_str = other.tab6_str;
-			other.tab6_str = NULL;
-			capacity = other.capacity;
-			other.capacity = 0;
-			len = other.len;
-			other.len = 0;
+			return *this;
+		}
+
+		// move constructor and assignment
+		OrigBuf(OrigBuf&& other)
+			: readPairOrigBuf(std::exchange(other.readPairOrigBuf,(char*)NULL)), readPairOrigBuf_capacity(std::exchange(other.readPairOrigBuf_capacity,0))
+			, readaOrigBuf_len(std::exchange(other.readaOrigBuf_len,0)), readbOrigBuf_len(std::exchange(other.readbOrigBuf_len,0))
+			, readNameBuf_len(std::exchange(other.readNameBuf_len,0))
+			, readaPresent(std::exchange(other.readaPresent,false)), readbPresent(std::exchange(other.readbPresent,false))
+		{
+		}
+
+		OrigBuf& operator=(OrigBuf&& other) {
+			readPairOrigBuf = std::exchange(other.readPairOrigBuf,(char*)NULL);
+			readPairOrigBuf_capacity = std::exchange(other.readPairOrigBuf_capacity,0);
+			readaOrigBuf_len = std::exchange(other.readaOrigBuf_len,0);
+			readbOrigBuf_len = std::exchange(other.readbOrigBuf_len,0);
+			readNameBuf_len = std::exchange(other.readNameBuf_len,0);
+			readaPresent = std::exchange(other.readaPresent,false);
+			readbPresent = std::exchange(other.readbPresent,false);
+
+			return *this;
+		}
+
+		// cleanup 
+		void reset() {
+			if (readPairOrigBuf!=NULL) delete[] readPairOrigBuf;
+			readPairOrigBuf = NULL;
+			readPairOrigBuf_capacity = 0;
+			readaOrigBuf_len = 0;
+			readbOrigBuf_len = 0;
+			readNameBuf_len = 0;
+			readaPresent = false;
+			readbPresent = false;
+		}
+
+		~OrigBuf() {
+			reset();
+		}
+
+		void saveOrigBufs(const Read& read_a, const Read& read_b, const bool want_passthrough);
+
+		bool valid() const { return readPairOrigBuf!=NULL; }
+
+		void remove_present(bool set_read_b) {
+			if (set_read_b) {
+				readbPresent = false;
+			} else {
+				readaPresent = false;
+			}
+		}
+
+		// access
+		uint32_t readOrigBuf_len() const {return readaOrigBuf_len+readbOrigBuf_len+readNameBuf_len+3;}
+
+		const char *name_buf() const {
+			if (readPairOrigBuf==NULL) return NULL;
+			uint32_t off = readaOrigBuf_len+readbOrigBuf_len+2;
+			return readPairOrigBuf+off;
+		}
+
+		uint32_t name_len() const { return readNameBuf_len;}
+
+		const char *orig_buf(bool get_read_b) const {
+			if (readPairOrigBuf==NULL) return NULL;
+			uint32_t off = 0;
+			if (get_read_b) off += readaOrigBuf_len+1;
+			return readPairOrigBuf+off;
+		}
+
+		uint32_t orig_len(bool get_read_b) const { return get_read_b? readbOrigBuf_len : readaOrigBuf_len;}
+
+	private:
+		void origbuf_alloc(uint32_t size);
+		uint32_t copyOptFieldNewlineEscaped(char * const out_buf, const char raw_buf[], uint32_t raw_len);
+
+	};
+
+	class ReadElement {
+	private:
+		// Buffer containing the tab6-formatted string
+		char    *tab6_str;
+		uint32_t tab6_capacity;
+		uint32_t tab6_len;
+ 
+	public:
+		ReadElement() 
+			: tab6_str(NULL), tab6_capacity(0), tab6_len(0)
+		{}
+
+		~ReadElement() {
+			reset();
+		}
+
+		ReadElement(const ReadElement& other)
+			: tab6_str(NULL), tab6_capacity(0), tab6_len(other.tab6_len) 
+		{
+			if (tab6_len>0) {
+				// alloc only what we need, even if other buf was much larger for historical reasons
+				tab6_alloc(tab6_len);
+				memcpy(tab6_str, other.tab6_str,tab6_len);
+			} else if (other.tab6_str!=NULL) {
+				// since tab6_str==NULL is special, make sure mine is not null, either
+				tab6_alloc(1);
+			}
+		}
+
+		ReadElement& operator=(const ReadElement& other) {
+			tab6_len = other.tab6_len;
+			if (tab6_len>0) {
+				// alloc only what we need, even if other buf was much larger for historical reasons
+				tab6_alloc(other.tab6_len);
+				memcpy(tab6_str, other.tab6_str,tab6_len);
+			} else if (other.tab6_str!=NULL) {
+                                // since tab6_str==NULL is special, make sure mine is not null, either
+                                tab6_alloc(1);
+                        }
+
+			return *this;
+		}
+
+		ReadElement(ReadElement&& other)
+			: tab6_str(std::exchange(other.tab6_str,(char*)NULL)), tab6_capacity(std::exchange(other.tab6_capacity,0)), tab6_len(std::exchange(other.tab6_len,0)) 
+		{
+		}
+
+		ReadElement& operator=(ReadElement&& other) {
+			tab6_str = std::exchange(other.tab6_str,(char*)NULL);
+			tab6_capacity= std::exchange(other.tab6_capacity,0);
+			tab6_len = std::exchange(other.tab6_len,0);
+			return *this;
 		}
 
 		// fill this buffer with tab6 data from the two reads
-		void readPair2Tab6(const Read& read_a, const Read& read_b);
+		void readPair2Tab6(PatternSourceWebClient::LockedOrigBufMap& obmap, const Read& read_a, const Read& read_b, const bool want_passthrough);
 
 		bool empty() { return tab6_str==NULL; }
-		char *buf() {return tab6_str;};
-		const char *buf() const {return tab6_str;};
 
-		uint32_t len;
+		char *buf() { return tab6_str; }
+		const char *buf() const { return tab6_str; }
+		uint32_t buf_len() const { return tab6_len; }
 
 		// =======================
 		// mostly for internal use
 
-		void clear_and_alloc(size_t size);
-		void append(const char *str, size_t str_len);
+		void clear_and_alloc(uint32_t size);
+		// assumes the buffer is already allocated and large enough
+		void append(const char *str, uint32_t str_len);
+		// assumes the buffer is already allocated and large enough
 		void append(const char chr);
+
 		void reset() {
 			if (tab6_str!=NULL) delete[] tab6_str;
 			tab6_str = NULL;
-			capacity=0;
-			len=0;
+			tab6_capacity=0;
+			tab6_len=0;
 		}
+	private:
+		void tab6_alloc(uint32_t size);
 	};
 
 	class Config {
 	public:
-		Config(const char *iname) : 
+		Config(const char *iname, bool want_passthrough_) : 
 			index_name(iname),
+			want_passthrough(want_passthrough_),
 			seedLen(0),
 			maxDpStreak(0),
 			seedRounds(0),
 			khits(-1) {}
 
 		const char *index_name;
+		bool want_passthrough;
 		int seedLen;
 		int maxDpStreak;
 		int seedRounds;
@@ -2238,6 +2404,7 @@ public:
 		server_port_(server_port),
 		config_(config),
 		obuf_(obuf),
+		obmap_(),
 		psq_empty_(n_writecache),
 		psq_send_(),
 		hasErrors_(false),
@@ -2263,7 +2430,7 @@ public:
 		if (!goodState()) return false;
 		ReadElement el(psq_empty_.pop());
 		if (goodState()) {
-			el.readPair2Tab6(read_a,read_b);
+			el.readPair2Tab6(obmap_,read_a,read_b,config_.want_passthrough);
 			psq_send_.push(el);
 		}
 		return goodState();
@@ -2284,7 +2451,104 @@ public:
 	static constexpr int RE_PER_PACKET = 40; // can be small-ish, we just need enough for a couple IP packets, and each line is O(100) bytes
 
 private:
-	
+	/*
+	 * Use a ordered list to remember the original read names and bufs
+	 * since we are sending only the id to the server.
+	 *
+	 * To minimize lookup costs, we use a direct idx->buf linear mapping,
+	 * only resetting the counter when we empty the buffer.
+	 *
+	 * To avoid waiting (most of the times), we use two internal buffers
+	 * so one is typically filled and the other is being emptied.
+	 */
+	class LockedOrigBufMap {
+	public:
+		static constexpr uint16_t BUF_CAPACITY = 10000;
+
+		LockedOrigBufMap()
+			: buf0_used_idx(0), buf1_used_idx(0)
+			, buf0_used_cnt(0), buf1_used_cnt(0)
+		{} // use default contructor for the rest
+
+		// save the origbufs and names in the map
+		// return index on how to access it
+		uint16_t saveOrigBufs(const Read& read_a, const Read& read_b, const bool want_passthrough) {
+			OrigBuf ob;
+			ob.saveOrigBufs(read_a, read_b, want_passthrough);
+			return take_ownership(std::move(ob));
+		}
+
+		// Retrieval API
+		// Returns an invalid object, if idx invalid
+		const OrigBuf& lookup(uint16_t idx) const { 
+			std::unique_lock<std::mutex> lk(m_);
+			const OrigBuf& ob = (idx<BUF_CAPACITY) ? buf0[idx] : buf1[idx-BUF_CAPACITY];
+			return (ob.valid()) ? ob : invalid_ob; // ob may be changed after we release the lock, if it was invalid
+		}
+
+		// Returns an invalid object, if idx invalid
+		// Note: DO NOT change a returned invalid object!
+		OrigBuf& lookup(uint16_t idx) { 
+			std::unique_lock<std::mutex> lk(m_);
+			OrigBuf& ob = (idx<BUF_CAPACITY) ? buf0[idx] : buf1[idx-BUF_CAPACITY];
+			return (ob.valid()) ? ob : invalid_ob; // ob may be changed after we release the lock, if it was invalid
+		}
+
+		OrigBuf release(uint16_t idx) {
+			std::unique_lock<std::mutex> lk(m_);
+			OrigBuf out = std::move((idx<BUF_CAPACITY) ? buf0[idx] : buf1[idx-BUF_CAPACITY]);
+			if (idx<BUF_CAPACITY) {
+				buf0_used_cnt--;
+				if (buf0_used_cnt==0) {
+					// since we emptied the buffer, we can write again
+					buf0_used_idx = 0;
+					cv_.notify_all();
+				}
+			} else {
+				buf1_used_cnt--;
+				if (buf1_used_cnt==0) {
+					// since we emptied the buffer, we can write again
+					buf1_used_idx = 0;
+					cv_.notify_all();
+				}
+			}
+			return out; // ideally this will be a move after optimization
+		}
+
+	private:
+		uint16_t take_ownership(OrigBuf&& el) {
+			std::unique_lock<std::mutex> lk(m_);
+			cv_.wait(lk, [this] { return (buf0_used_idx<BUF_CAPACITY) || (buf1_used_idx<BUF_CAPACITY);});
+			uint16_t myidx;
+			if (buf0_used_idx<BUF_CAPACITY) {
+				myidx = buf0_used_idx;
+				buf0[myidx] = std::move(el);
+				buf0_used_idx++;
+				buf0_used_cnt++;
+			} else {
+				assert(buf1_used_idx<BUF_CAPACITY);
+				myidx = buf1_used_idx;
+				buf1[myidx] = std::move(el);
+				buf1_used_idx++;
+				buf1_used_cnt++;
+				myidx+=BUF_CAPACITY;
+			}
+
+			return myidx;
+		}
+
+		uint16_t buf0_used_idx;
+		uint16_t buf1_used_idx;
+		uint16_t buf0_used_cnt;
+		uint16_t buf1_used_cnt;
+		std::array<OrigBuf,BUF_CAPACITY> buf0;
+		std::array<OrigBuf,BUF_CAPACITY> buf1;
+		OrigBuf invalid_ob;    // fixed object that is known to be always invalid
+		// the following are completely internal, and are reset at each method exit, so mutable
+		mutable std::mutex m_;
+		mutable std::condition_variable cv_;
+	};
+
 	template <typename T>
 	class LockedQueueCV {
 	public:
@@ -2447,6 +2711,10 @@ private:
 	// returns true if it finds one
 	static bool find_request_terminator(const char str[]);
 
+	static void process_read_line(OutFileBuf& obuf, const LockedOrigBufMap& obmap, char line_buf[], const int line_size, const bool want_passthrough);
+	static void process_end_read(LockedOrigBufMap& obmap, char line_buf[], const int line_size);
+	static bool process_read_buffer(OutFileBuf& obuf, LockedOrigBufMap& obmap, char recv_str[], int& recv_filled, const bool want_passthrough);
+
 	static constexpr int MAX_HEADER_SIZE = 1023;
 
 	static void close_socket(int fd);
@@ -2467,6 +2735,7 @@ private:
 	const Config& config_;
 	OutFileBuf& obuf_;
 
+	LockedOrigBufMap   obmap_;
 	LockedEmptyQueueCV psq_empty_;
 	LockedSendQueueCV  psq_send_;
 
